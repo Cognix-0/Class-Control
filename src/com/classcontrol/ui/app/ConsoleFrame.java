@@ -14,10 +14,13 @@ public class ConsoleFrame extends JFrame {
 
     private final LabService labService;
     private final SeatMapPanel seatMapPanel = new SeatMapPanel();
+    private final ActionBar actionBar;
 
     public ConsoleFrame(LabService labService) {
         super("ClassControl - Instructor Console");
         this.labService = labService;
+        this.actionBar = new ActionBar(labService, seatMapPanel::getSelectedIds);
+        seatMapPanel.setSelectionListener(ids -> actionBar.updateEnabled());
 
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1024, 700));
@@ -43,17 +46,13 @@ public class ConsoleFrame extends JFrame {
         JCheckBox liveView = new JCheckBox("Live view");
         JLabel connection = new JLabel("Mode: " + labService.getClass().getSimpleName());
 
+        liveView.addActionListener(e -> labService.setLiveView(liveView.isSelected(), 2000));
+
         topBar.add(liveView, BorderLayout.WEST);
         topBar.add(connection, BorderLayout.EAST);
-        topBar.add(buildActionBar(), BorderLayout.CENTER);
-        return topBar;
-    }
-
-    private JPanel buildActionBar() {
-        JPanel actionBar = new JPanel();
         actionBar.setBorder(BorderFactory.createTitledBorder("Actions"));
-        actionBar.add(new JLabel("(action buttons go here)"));
-        return actionBar;
+        topBar.add(actionBar, BorderLayout.CENTER);
+        return topBar;
     }
 
     private JPanel buildCenter() {
