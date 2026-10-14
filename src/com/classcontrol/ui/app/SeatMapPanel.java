@@ -3,11 +3,14 @@ package com.classcontrol.ui.app;
 import com.classcontrol.ui.api.LabListener;
 import com.classcontrol.ui.api.PcView;
 
+import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.FlowLayout;
 import java.awt.event.MouseEvent;
 import java.util.LinkedHashMap;
@@ -18,18 +21,38 @@ import java.util.function.Consumer;
 
 public class SeatMapPanel extends JPanel implements LabListener {
 
+    private static final String CARD_GRID = "grid";
+    private static final String CARD_EMPTY = "empty";
+
     private final Map<String, PcTile> tiles = new LinkedHashMap<>();
     private final Map<String, PcView> latestPcs = new LinkedHashMap<>();
     private final Set<String> selected = new LinkedHashSet<>();
-    private final JPanel grid = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 6));
-    private final JLabel emptyState = new JLabel("No PCs connected", SwingConstants.CENTER);
+    private final JPanel grid = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+    private final CardLayout cardLayout = new CardLayout();
+    private final JPanel cards = new JPanel(cardLayout);
 
     private Consumer<Set<String>> selectionListener = ids -> {};
 
     public SeatMapPanel() {
         setLayout(new BorderLayout());
-        add(grid, BorderLayout.CENTER);
-        add(emptyState, BorderLayout.NORTH);
+        setBackground(Theme.PAGE_BG);
+
+        grid.setBackground(Theme.PAGE_BG);
+        JScrollPane scrollPane = new JScrollPane(grid);
+        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+        scrollPane.getViewport().setBackground(Theme.PAGE_BG);
+        scrollPane.getVerticalScrollBar().setUnitIncrement(24);
+
+        JLabel emptyState = new JLabel("No PCs connected", SwingConstants.CENTER);
+        emptyState.setFont(Theme.FONT_BASE);
+        emptyState.setForeground(Theme.TEXT_SECONDARY);
+        JPanel emptyPanel = new JPanel(new BorderLayout());
+        emptyPanel.setBackground(Theme.PAGE_BG);
+        emptyPanel.add(emptyState, BorderLayout.CENTER);
+
+        cards.add(scrollPane, CARD_GRID);
+        cards.add(emptyPanel, CARD_EMPTY);
+        add(cards, BorderLayout.CENTER);
         updateEmptyState();
     }
 
@@ -110,8 +133,7 @@ public class SeatMapPanel extends JPanel implements LabListener {
     }
 
     private void updateEmptyState() {
-        emptyState.setVisible(tiles.isEmpty());
-        grid.setVisible(!tiles.isEmpty());
+        cardLayout.show(cards, tiles.isEmpty() ? CARD_EMPTY : CARD_GRID);
     }
 
     @Override
