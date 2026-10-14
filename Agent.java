@@ -18,7 +18,7 @@ public class Agent {
     static JFrame view;
     static JLabel viewLabel;
 
-    static JLabel status = new JLabel("Starting...");
+    static JLabel status = new JLabel("Starting..."), info = new JLabel();
     static JTextArea logArea = new JTextArea();
 
     static void log(String m) {
@@ -41,18 +41,24 @@ public class Agent {
             status.setFont(status.getFont().deriveFont(Font.BOLD, 16f));
             status.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
             logArea.setEditable(false);
-            f.add(status, BorderLayout.NORTH);
+            JPanel top = new JPanel(new GridLayout(0, 1));
+            top.add(status);
+            top.add(info);
+            f.add(top, BorderLayout.NORTH);
             f.add(new JScrollPane(logArea), BorderLayout.CENTER);
             f.setSize(420, 300);
             f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             f.setVisible(true);
         });
+        SwingUtilities.invokeLater(() -> info.setText("  Teacher: " + host + ":" + port + "   (this PC: " + me + ")"));
         log("Agent started, teacher=" + host + ":" + port);
         while (true) { // reconnect forever so a teacher restart doesn't strand the PC
             setStatus("Connecting to " + host + "...", Color.GRAY);
             try (Socket s = new Socket(host, port)) {
                 setStatus("Connected to teacher (" + host + ")", new Color(0, 130, 0));
                 log("Connected as " + me);
+                final String mine = s.getLocalAddress().getHostAddress();
+                SwingUtilities.invokeLater(() -> info.setText("  Teacher: " + host + ":" + port + "   (this PC: " + me + ", " + mine + ")"));
                 PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"), true);
                 out.println(token + "\t" + me);
                 BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));

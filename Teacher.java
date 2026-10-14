@@ -96,6 +96,18 @@ public class Teacher {
         }, "share").start();
     }
 
+    /** Non-loopback IPv4 addresses of this PC: what students must type into the agent. */
+    static String myIps() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            for (NetworkInterface n : java.util.Collections.list(NetworkInterface.getNetworkInterfaces()))
+                if (n.isUp() && !n.isLoopback())
+                    for (InetAddress ia : java.util.Collections.list(n.getInetAddresses()))
+                        if (ia instanceof Inet4Address) sb.append(sb.length() > 0 ? ", " : "").append(ia.getHostAddress());
+        } catch (SocketException ignored) { }
+        return sb.length() > 0 ? sb.toString() : "no network found";
+    }
+
     static void gui() {
         JFrame f = new JFrame("Classroom Control - Teacher");
         JList<Student> list = new JList<>(students);
@@ -109,7 +121,10 @@ public class Teacher {
         bar.add(btn("Block sites", () -> ask("Sites to block (comma separated):", list, "BLOCK")));
         bar.add(btn("Allow ONLY these sites", () -> ask("Only allow these sites (comma separated):", list, "ALLOW")));
         bar.add(btn("Unblock all sites", () -> send(list, "UNBLOCK", "")));
-        f.add(new JLabel("  Select students (none = all)"), BorderLayout.NORTH);
+        JLabel info = new JLabel("<html>Students connect to: <b>" + myIps() + "</b> &nbsp; port <b>" + port
+                + "</b> &nbsp; password <b>" + token + "</b><br>Select students below (none = all)</html>");
+        info.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        f.add(info, BorderLayout.NORTH);
         f.add(new JScrollPane(list), BorderLayout.CENTER);
         f.add(bar, BorderLayout.EAST);
         f.setSize(560, 360);
