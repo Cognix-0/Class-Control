@@ -16,6 +16,7 @@ public class ConsoleFrame extends JFrame {
     private final SeatMapPanel seatMapPanel = new SeatMapPanel();
     private final ActionBar actionBar;
     private final DetailPanel detailPanel = new DetailPanel();
+    private final EventLogPanel eventLogPanel = new EventLogPanel();
 
     public ConsoleFrame(LabService labService) {
         super("ClassControl - Instructor Console");
@@ -40,6 +41,7 @@ public class ConsoleFrame extends JFrame {
         setLocationRelativeTo(null);
 
         labService.addListener(seatMapPanel);
+        labService.addListener(eventLogPanel);
         seatMapPanel.setPcs(labService.listPcs());
     }
 
@@ -92,10 +94,10 @@ public class ConsoleFrame extends JFrame {
     }
 
     private JPanel buildEventLog() {
-        JPanel log = new JPanel();
+        JPanel log = new JPanel(new BorderLayout());
         log.setBorder(BorderFactory.createTitledBorder("Event log"));
         log.setPreferredSize(new Dimension(0, 120));
-        log.add(new JLabel("(events appear here)"));
+        log.add(eventLogPanel, BorderLayout.CENTER);
         return log;
     }
 }
