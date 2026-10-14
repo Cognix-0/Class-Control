@@ -107,6 +107,7 @@ public class Teacher {
         bar.add(btn("Share my screen", () -> share(list)));
         bar.add(btn("Stop sharing", () -> sharing = false));
         bar.add(btn("Block sites", () -> ask("Sites to block (comma separated):", list, "BLOCK")));
+        bar.add(btn("Allow ONLY these sites", () -> ask("Only allow these sites (comma separated):", list, "ALLOW")));
         bar.add(btn("Unblock all sites", () -> send(list, "UNBLOCK", "")));
         f.add(new JLabel("  Select students (none = all)"), BorderLayout.NORTH);
         f.add(new JScrollPane(list), BorderLayout.CENTER);

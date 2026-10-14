@@ -13,7 +13,9 @@ public class Agent {
     static final Path HOSTS = Path.of(System.getenv().getOrDefault("SystemRoot", "C:\\Windows"),
             "System32", "drivers", "etc", "hosts");
     static final String BEGIN = "# CLASSROOM-BEGIN", END = "# CLASSROOM-END";
-    static JFrame lock, view;
+    static java.util.List<JFrame> locks = new java.util.ArrayList<>();
+    static javax.swing.Timer lockTimer;
+    static JFrame view;
     static JLabel viewLabel;
 
     static JLabel status = new JLabel("Starting...");
@@ -78,24 +80,32 @@ public class Agent {
                 case "SCREEN" -> { var img = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(arg))); SwingUtilities.invokeLater(() -> show(img)); }
                 case "SCREENOFF" -> SwingUtilities.invokeLater(Agent::hideView);
                 case "UNLOCK" -> SwingUtilities.invokeLater(Agent::unlock);
-                case "BLOCK" -> block(arg);
-                case "UNBLOCK" -> block("");
+                case "BLOCK" -> { block(arg); policy(arg, false); }
+                case "ALLOW" -> { block(""); policy(arg, true); }
+                case "UNBLOCK" -> { block(""); policy("", false); }
             }
         } catch (Exception e) { log("Error: " + e); }
     }
 
+    /** Covers every monitor and keeps grabbing focus back, so Alt+Tab / Win key only flash. Task Manager is disabled while locked. */
     static void lock(String msg) {
-        if (lock != null) return;
-        lock = new JFrame();
-        lock.setUndecorated(true);
-        lock.setAlwaysOnTop(true);
-        lock.getContentPane().setBackground(Color.BLACK);
-        JLabel l = new JLabel(msg, SwingConstants.CENTER);
-        l.setForeground(Color.WHITE);
-        l.setFont(l.getFont().deriveFont(36f));
-        lock.add(l);
-        GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().setFullScreenWindow(lock);
-        // shortcut: Ctrl+Alt+Del / Task Manager can still escape the lock; harden with a kiosk policy if needed
+        if (!locks.isEmpty()) return;
+        for (GraphicsDevice d : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+            JFrame f = new JFrame(d.getDefaultConfiguration());
+            f.setUndecorated(true);
+            f.setAlwaysOnTop(true);
+            f.getContentPane().setBackground(Color.BLACK);
+            JLabel l = new JLabel(msg, SwingConstants.CENTER);
+            l.setForeground(Color.WHITE);
+            l.setFont(l.getFont().deriveFont(36f));
+            f.add(l);
+            d.setFullScreenWindow(f);
+            locks.add(f);
+        }
+        lockTimer = new javax.swing.Timer(200, e -> { for (JFrame f : locks) { f.toFront(); f.requestFocus(); } });
+        lockTimer.start();
+        run("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "/v", "DisableTaskMgr", "/t", "REG_DWORD", "/d", "1", "/f");
+        // shortcut: Ctrl+Alt+Del (Lock/Sign out) still works; a low-level keyboard hook (JNA) or kiosk mode would close it
     }
 
     static void show(java.awt.image.BufferedImage img) {
@@ -118,7 +128,31 @@ public class Agent {
     }
 
     static void unlock() {
-        if (lock != null) { lock.dispose(); lock = null; }
+        if (lockTimer != null) lockTimer.stop();
+        for (JFrame f : locks) f.dispose();
+        locks.clear();
+        run("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "/v", "DisableTaskMgr", "/f");
+    }
+
+    static void run(String... cmd) {
+        try { new ProcessBuilder(cmd).redirectErrorStream(true).start().waitFor(); } catch (Exception e) { log("Error: " + e); }
+    }
+
+    /** Chrome and Edge policy: blocklist, or (allowOnly) block everything except the listed sites. Browsers apply it live. */
+    static void policy(String sites, boolean allowOnly) {
+        for (String b : new String[]{"Google\\Chrome", "Microsoft\\Edge"}) {
+            String root = "HKLM\\SOFTWARE\\Policies\\" + b;
+            run("reg", "delete", root + "\\URLBlocklist", "/f");
+            run("reg", "delete", root + "\\URLAllowlist", "/f");
+            if (sites.isBlank()) continue;
+            if (allowOnly) run("reg", "add", root + "\\URLBlocklist", "/v", "1", "/t", "REG_SZ", "/d", "*", "/f");
+            int i = 1;
+            for (String d : sites.split("[,\\s]+"))
+                if (d.matches("[A-Za-z0-9.-]+")) // trust boundary: no junk into the registry
+                    run("reg", "add", root + (allowOnly ? "\\URLAllowlist" : "\\URLBlocklist"), "/v", "" + i++, "/t", "REG_SZ", "/d", d, "/f");
+        }
+        run("ipconfig", "/flushdns");
+        // shortcut: Chrome/Edge only; Firefox and other apps are covered just by the hosts-file blocklist
     }
 
     /** Rewrites our marked block in the hosts file; empty list removes it. */
