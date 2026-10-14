@@ -17,10 +17,16 @@ public class EventLogPanel extends JPanel implements LabListener {
     private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss");
 
     public EventLogPanel() {
+        setOpaque(false);
         setLayout(new BorderLayout());
         textArea.setEditable(false);
         textArea.setRows(5);
-        add(new JScrollPane(textArea), BorderLayout.CENTER);
+        textArea.setFont(Theme.FONT_MONO);
+        textArea.setForeground(Theme.TEXT_PRIMARY);
+        textArea.setBackground(Theme.CARD_BG);
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        scrollPane.setBorder(javax.swing.BorderFactory.createEmptyBorder());
+        add(scrollPane, BorderLayout.CENTER);
     }
 
     public void append(String message) {

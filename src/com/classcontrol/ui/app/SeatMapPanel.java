@@ -27,7 +27,7 @@ public class SeatMapPanel extends JPanel implements LabListener {
     private final Map<String, PcTile> tiles = new LinkedHashMap<>();
     private final Map<String, PcView> latestPcs = new LinkedHashMap<>();
     private final Set<String> selected = new LinkedHashSet<>();
-    private final JPanel grid = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+    private final WrapGridPanel grid = new WrapGridPanel(new WrapLayout(FlowLayout.LEFT, 10, 10));
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel cards = new JPanel(cardLayout);
 

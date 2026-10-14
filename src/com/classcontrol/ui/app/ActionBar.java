@@ -6,6 +6,8 @@ import com.classcontrol.ui.api.LabService;
 import javax.swing.JButton;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import java.awt.FlowLayout;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -14,26 +16,34 @@ public class ActionBar extends JPanel {
 
     private final LabService labService;
     private final Supplier<Set<String>> selectionSupplier;
-    private final List<JButton> selectionRequiredButtons = new java.util.ArrayList<>();
+    private final List<JButton> selectionRequiredButtons = new ArrayList<>();
 
     public ActionBar(LabService labService, Supplier<Set<String>> selectionSupplier) {
         this.labService = labService;
         this.selectionSupplier = selectionSupplier;
+        setOpaque(false);
+        setLayout(new FlowLayout(FlowLayout.LEFT, 8, 4));
 
-        addActionButton("Message", Command.MSG, true);
-        addActionButton("Open URL", Command.URL, true);
-        addActionButton("Lock", Command.LOCK, false);
-        addActionButton("Unlock", Command.UNLOCK, false);
-        addActionButton("Screen On", Command.SCREEN, false);
-        addActionButton("Screen Off", Command.SCREENOFF, false);
-        addActionButton("Block site", Command.BLOCK, true);
-        addActionButton("Unblock site", Command.UNBLOCK, true);
+        addActionButton("Message", Command.MSG, true, Style.ACCENT);
+        addActionButton("Open URL", Command.URL, true, Style.NEUTRAL);
+        addActionButton("Lock", Command.LOCK, false, Style.DANGER);
+        addActionButton("Unlock", Command.UNLOCK, false, Style.NEUTRAL);
+        addActionButton("Screen On", Command.SCREEN, false, Style.NEUTRAL);
+        addActionButton("Screen Off", Command.SCREENOFF, false, Style.DANGER);
+        addActionButton("Block site", Command.BLOCK, true, Style.DANGER);
+        addActionButton("Unblock site", Command.UNBLOCK, true, Style.NEUTRAL);
 
         updateEnabled();
     }
 
-    private void addActionButton(String label, Command cmd, boolean needsArg) {
-        JButton button = new JButton(label);
+    private enum Style { ACCENT, NEUTRAL, DANGER }
+
+    private void addActionButton(String label, Command cmd, boolean needsArg, Style style) {
+        JButton button = switch (style) {
+            case ACCENT -> new RoundedButton(label, Theme.ACCENT, Theme.ACCENT_HOVER, java.awt.Color.WHITE);
+            case DANGER -> new RoundedButton(label, Theme.DANGER, Theme.DANGER_HOVER, java.awt.Color.WHITE);
+            case NEUTRAL -> new RoundedButton(label, Theme.NEUTRAL_BUTTON, Theme.NEUTRAL_BUTTON_HOVER, Theme.TEXT_PRIMARY);
+        };
         button.addActionListener(e -> onAction(cmd, needsArg));
         selectionRequiredButtons.add(button);
         add(button);
