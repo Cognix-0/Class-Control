@@ -10,6 +10,7 @@ public final class Theme {
     private Theme() {}
 
     public static final Color PAGE_BG = new Color(0xFA, 0xFA, 0xFB);
+    public static final Color CANVAS_BG = new Color(0xEE, 0xED, 0xF7);
     public static final Color CARD_BG = Color.WHITE;
     public static final Color BORDER = new Color(0xEB, 0xEB, 0xEF);
     public static final Color BORDER_STRONG = new Color(0xDC, 0xDC, 0xE3);
@@ -20,6 +21,20 @@ public final class Theme {
     public static final Color ACCENT = new Color(0x5E, 0x6A, 0xD2);
     public static final Color ACCENT_HOVER = new Color(0x4E, 0x5A, 0xC2);
     public static final Color ACCENT_TINT = new Color(0x5E, 0x6A, 0xD2, 26);
+    public static final Color ACCENT_2 = new Color(0x22, 0xC3, 0xB6);
+
+    public static final Color SIDEBAR_BG = new Color(0x14, 0x15, 0x20);
+    public static final Color SIDEBAR_BG_HOVER = new Color(0x22, 0x24, 0x33);
+    public static final Color SIDEBAR_ACTIVE_BG = new Color(0x5E, 0x6A, 0xD2);
+    public static final Color SIDEBAR_ICON = new Color(0x8D, 0x90, 0xA6);
+    public static final Color SIDEBAR_ICON_ACTIVE = Color.WHITE;
+
+    public static final Color DOCK_BG = new Color(0x1B, 0x1C, 0x28);
+    public static final Color DOCK_BUTTON_BG = new Color(0x27, 0x29, 0x39);
+    public static final Color DOCK_BUTTON_HOVER = new Color(0x32, 0x35, 0x48);
+    public static final Color DOCK_TEXT = new Color(0xEC, 0xEC, 0xF2);
+    public static final Color DOCK_TEXT_MUTED = new Color(0x8D, 0x90, 0xA6);
+    public static final Color DOCK_DIVIDER = new Color(0x2E, 0x30, 0x40);
 
     public static final Color TEXT_PRIMARY = new Color(0x1A, 0x1A, 0x1F);
     public static final Color TEXT_SECONDARY = new Color(0x75, 0x75, 0x7D);

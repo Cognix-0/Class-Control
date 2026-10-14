@@ -99,12 +99,17 @@ public class PcTile extends JPanel {
     protected void paintComponent(Graphics g) {
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        int w = getWidth() - 1, h = getHeight() - 4;
+        if (hovered || selected) {
+            g2.setColor(new Color(0x10, 0x10, 0x20, 26));
+            g2.fillRoundRect(0, 3, w, h, 14, 14);
+        }
         Color fill = selected ? Theme.ACCENT_TINT : (hovered ? Theme.NEUTRAL_BUTTON_HOVER : Theme.CARD_BG);
         g2.setColor(fill);
-        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+        g2.fillRoundRect(0, 0, w, h, 14, 14);
         g2.setStroke(new BasicStroke(selected ? 2f : 1f));
         g2.setColor(selected ? Theme.ACCENT : Theme.BORDER);
-        g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+        g2.drawRoundRect(0, 0, w, h, 14, 14);
         g2.dispose();
         super.paintComponent(g);
     }

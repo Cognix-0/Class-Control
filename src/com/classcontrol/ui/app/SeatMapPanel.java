@@ -35,19 +35,19 @@ public class SeatMapPanel extends JPanel implements LabListener {
 
     public SeatMapPanel() {
         setLayout(new BorderLayout());
-        setBackground(Theme.PAGE_BG);
+        setBackground(Theme.CANVAS_BG);
 
-        grid.setBackground(Theme.PAGE_BG);
+        grid.setBackground(Theme.CANVAS_BG);
         JScrollPane scrollPane = new JScrollPane(grid);
         scrollPane.setBorder(BorderFactory.createEmptyBorder());
-        scrollPane.getViewport().setBackground(Theme.PAGE_BG);
+        scrollPane.getViewport().setBackground(Theme.CANVAS_BG);
         scrollPane.getVerticalScrollBar().setUnitIncrement(24);
 
         JLabel emptyState = new JLabel("No PCs connected", SwingConstants.CENTER);
         emptyState.setFont(Theme.FONT_BASE);
         emptyState.setForeground(Theme.TEXT_SECONDARY);
         JPanel emptyPanel = new JPanel(new BorderLayout());
-        emptyPanel.setBackground(Theme.PAGE_BG);
+        emptyPanel.setBackground(Theme.CANVAS_BG);
         emptyPanel.add(emptyState, BorderLayout.CENTER);
 
         cards.add(scrollPane, CARD_GRID);
