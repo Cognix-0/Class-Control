@@ -44,6 +44,10 @@ public class ActionBar extends JPanel {
         if (selection.isEmpty()) {
             return;
         }
+        if (ConfirmDialog.needsConfirmation(cmd, selection.size())
+                && !ConfirmDialog.confirm(this, cmd, selection.size())) {
+            return;
+        }
         String arg = null;
         if (needsArg) {
             arg = JOptionPane.showInputDialog(this, cmd.name() + " - enter value:");
