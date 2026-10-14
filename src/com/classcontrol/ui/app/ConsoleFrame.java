@@ -7,13 +7,13 @@ import javax.swing.JCheckBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.SwingConstants;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 
 public class ConsoleFrame extends JFrame {
 
     private final LabService labService;
+    private final SeatMapPanel seatMapPanel = new SeatMapPanel();
 
     public ConsoleFrame(LabService labService) {
         super("ClassControl - Instructor Console");
@@ -31,6 +31,9 @@ public class ConsoleFrame extends JFrame {
         setContentPane(root);
         pack();
         setLocationRelativeTo(null);
+
+        labService.addListener(seatMapPanel);
+        seatMapPanel.setPcs(labService.listPcs());
     }
 
     private JPanel buildTopBar() {
@@ -56,9 +59,8 @@ public class ConsoleFrame extends JFrame {
     private JPanel buildCenter() {
         JPanel center = new JPanel(new BorderLayout());
         center.setBorder(BorderFactory.createTitledBorder("Seat map"));
-        JLabel emptyState = new JLabel("No PCs connected", SwingConstants.CENTER);
-        emptyState.setPreferredSize(new Dimension(600, 400));
-        center.add(emptyState, BorderLayout.CENTER);
+        seatMapPanel.setPreferredSize(new Dimension(600, 400));
+        center.add(seatMapPanel, BorderLayout.CENTER);
         return center;
     }
 
