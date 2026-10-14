@@ -21,7 +21,7 @@ public class DetailPanel extends JPanel {
     private final JLabel thumbLabel = new JLabel("", SwingConstants.CENTER);
     private final JLabel hostLabel = new JLabel();
     private final JLabel ipLabel = new JLabel();
-    private final JLabel statusLabel = new JLabel();
+    private final StatusBadge statusBadge = new StatusBadge();
     private final JLabel lastSeenLabel = new JLabel();
     private final JLabel placeholder = new JLabel("<html>Select a PC<br>to see details</html>");
 
@@ -30,11 +30,12 @@ public class DetailPanel extends JPanel {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
-        for (JLabel field : new JLabel[]{hostLabel, ipLabel, statusLabel, lastSeenLabel}) {
+        for (JLabel field : new JLabel[]{hostLabel, ipLabel, lastSeenLabel}) {
             field.setFont(Theme.FONT_BASE);
             field.setForeground(Theme.TEXT_PRIMARY);
             field.setAlignmentX(Component.LEFT_ALIGNMENT);
         }
+        statusBadge.setAlignmentX(Component.LEFT_ALIGNMENT);
         hostLabel.setFont(Theme.FONT_SECTION);
         placeholder.setFont(Theme.FONT_BASE);
         placeholder.setForeground(Theme.TEXT_SECONDARY);
@@ -62,21 +63,21 @@ public class DetailPanel extends JPanel {
     public void showPc(PcView pc) {
         removeAll();
         Image scaled = pc.thumbnail().getScaledInstance(THUMB_W, THUMB_H, Image.SCALE_SMOOTH);
-        thumbLabel.setIcon(new ImageIcon(scaled));
+        thumbLabel.setIcon(ImageUtil.roundedIcon(new ImageIcon(scaled), 10));
         thumbLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         hostLabel.setText(pc.host());
         ipLabel.setText(pc.ip());
-        statusLabel.setForeground(Theme.statusColor(pc.status()));
-        statusLabel.setText("● " + pc.status() + (pc.locked() ? "  🔒 locked" : ""));
+        statusBadge.setStatus(pc.status(), pc.locked());
         lastSeenLabel.setText("Last seen " + new SimpleDateFormat("HH:mm:ss").format(new Date(pc.lastSeenMs())));
         lastSeenLabel.setForeground(Theme.TEXT_SECONDARY);
 
         add(thumbLabel);
-        add(javax.swing.Box.createVerticalStrut(10));
+        add(javax.swing.Box.createVerticalStrut(12));
         add(hostLabel);
         add(ipLabel);
+        add(javax.swing.Box.createVerticalStrut(8));
+        add(statusBadge);
         add(javax.swing.Box.createVerticalStrut(6));
-        add(statusLabel);
         add(lastSeenLabel);
         revalidate();
         repaint();

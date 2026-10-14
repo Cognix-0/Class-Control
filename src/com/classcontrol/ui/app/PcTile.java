@@ -26,25 +26,26 @@ public class PcTile extends JPanel {
 
     private final String pcId;
     private final JLabel thumbLabel = new JLabel();
-    private final JLabel nameLabel = new JLabel("", SwingConstants.CENTER);
-    private final JLabel statusLabel = new JLabel("", SwingConstants.CENTER);
-    private PcView pc;
+    private final JLabel nameLabel = new JLabel();
+    private final StatusBadge statusBadge = new StatusBadge();
     private boolean selected;
+    private boolean hovered;
 
     public PcTile(PcView pc, BiConsumer<String, MouseEvent> onClick) {
         this.pcId = pc.id();
         setOpaque(false);
-        setLayout(new BorderLayout(0, 2));
-        setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        setPreferredSize(new Dimension(THUMB_W + 20, THUMB_H + 56));
+        setLayout(new BorderLayout(0, 8));
+        setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        setPreferredSize(new Dimension(THUMB_W + 24, THUMB_H + 66));
 
         nameLabel.setFont(Theme.FONT_SECTION);
         nameLabel.setForeground(Theme.TEXT_PRIMARY);
-        statusLabel.setFont(Theme.FONT_SMALL);
 
         javax.swing.Box south = javax.swing.Box.createVerticalBox();
         south.add(nameLabel);
-        south.add(statusLabel);
+        south.add(javax.swing.Box.createVerticalStrut(5));
+        statusBadge.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        south.add(statusBadge);
 
         add(thumbLabel, BorderLayout.CENTER);
         add(south, BorderLayout.SOUTH);
@@ -55,6 +56,18 @@ public class PcTile extends JPanel {
             @Override
             public void mouseClicked(MouseEvent e) {
                 onClick.accept(pcId, e);
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                hovered = true;
+                repaint();
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                hovered = false;
+                repaint();
             }
         });
     }
@@ -73,13 +86,11 @@ public class PcTile extends JPanel {
     }
 
     public void update(PcView pc) {
-        this.pc = pc;
         Image scaled = pc.thumbnail().getScaledInstance(THUMB_W, THUMB_H, Image.SCALE_SMOOTH);
-        thumbLabel.setIcon(new ImageIcon(scaled));
+        ImageIcon icon = new ImageIcon(scaled);
+        thumbLabel.setIcon(ImageUtil.roundedIcon(icon, 8));
         nameLabel.setText(pc.host());
-        Color statusColor = Theme.statusColor(pc.status());
-        statusLabel.setForeground(statusColor);
-        statusLabel.setText("● " + pc.status() + (pc.locked() ? "  🔒" : ""));
+        statusBadge.setStatus(pc.status(), pc.locked());
         setToolTipText(pc.host() + " - " + pc.ip() + " - " + pc.status());
         repaint();
     }
@@ -88,11 +99,12 @@ public class PcTile extends JPanel {
     protected void paintComponent(Graphics g) {
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setColor(selected ? new Color(0x2F, 0x6F, 0xED, 22) : Theme.CARD_BG);
-        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+        Color fill = selected ? Theme.ACCENT_TINT : (hovered ? Theme.NEUTRAL_BUTTON_HOVER : Theme.CARD_BG);
+        g2.setColor(fill);
+        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
         g2.setStroke(new BasicStroke(selected ? 2f : 1f));
         g2.setColor(selected ? Theme.ACCENT : Theme.BORDER);
-        g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+        g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
         g2.dispose();
         super.paintComponent(g);
     }

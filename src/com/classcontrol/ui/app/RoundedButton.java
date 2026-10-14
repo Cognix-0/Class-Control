@@ -11,11 +11,17 @@ public class RoundedButton extends JButton {
 
     private final Color bg;
     private final Color bgHover;
+    private final Color outline;
 
     public RoundedButton(String text, Color bg, Color bgHover, Color fg) {
+        this(text, bg, bgHover, fg, null);
+    }
+
+    public RoundedButton(String text, Color bg, Color bgHover, Color fg, Color outline) {
         super(text);
         this.bg = bg;
         this.bgHover = bgHover;
+        this.outline = outline;
         setContentAreaFilled(false);
         setFocusPainted(false);
         setBorderPainted(false);
@@ -32,7 +38,11 @@ public class RoundedButton extends JButton {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         Color fill = isEnabled() ? (getModel().isRollover() ? bgHover : bg) : disabled(bg);
         g2.setColor(fill);
-        g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+        if (outline != null) {
+            g2.setColor(isEnabled() ? outline : disabled(outline));
+            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+        }
         g2.dispose();
         super.paintComponent(g);
     }
