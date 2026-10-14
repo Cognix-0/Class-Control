@@ -15,12 +15,16 @@ public class ConsoleFrame extends JFrame {
     private final LabService labService;
     private final SeatMapPanel seatMapPanel = new SeatMapPanel();
     private final ActionBar actionBar;
+    private final DetailPanel detailPanel = new DetailPanel();
 
     public ConsoleFrame(LabService labService) {
         super("ClassControl - Instructor Console");
         this.labService = labService;
         this.actionBar = new ActionBar(labService, seatMapPanel::getSelectedIds);
-        seatMapPanel.setSelectionListener(ids -> actionBar.updateEnabled());
+        seatMapPanel.setSelectionListener(ids -> {
+            actionBar.updateEnabled();
+            updateDetailPanel(ids);
+        });
 
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1024, 700));
@@ -64,11 +68,27 @@ public class ConsoleFrame extends JFrame {
     }
 
     private JPanel buildDetailPanel() {
-        JPanel detail = new JPanel();
+        JPanel detail = new JPanel(new BorderLayout());
         detail.setBorder(BorderFactory.createTitledBorder("Detail"));
         detail.setPreferredSize(new Dimension(220, 0));
-        detail.add(new JLabel("(select a PC)"));
+        detail.add(detailPanel, BorderLayout.NORTH);
         return detail;
+    }
+
+    private void updateDetailPanel(java.util.Set<String> selectedIds) {
+        if (selectedIds.isEmpty()) {
+            detailPanel.showPlaceholder();
+        } else if (selectedIds.size() == 1) {
+            String id = selectedIds.iterator().next();
+            var pc = seatMapPanel.getPc(id);
+            if (pc != null) {
+                detailPanel.showPc(pc);
+            } else {
+                detailPanel.showPlaceholder();
+            }
+        } else {
+            detailPanel.showMultiple(selectedIds.size());
+        }
     }
 
     private JPanel buildEventLog() {

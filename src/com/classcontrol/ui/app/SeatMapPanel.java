@@ -19,6 +19,7 @@ import java.util.function.Consumer;
 public class SeatMapPanel extends JPanel implements LabListener {
 
     private final Map<String, PcTile> tiles = new LinkedHashMap<>();
+    private final Map<String, PcView> latestPcs = new LinkedHashMap<>();
     private final Set<String> selected = new LinkedHashSet<>();
     private final JPanel grid = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 6));
     private final JLabel emptyState = new JLabel("No PCs connected", SwingConstants.CENTER);
@@ -47,6 +48,10 @@ public class SeatMapPanel extends JPanel implements LabListener {
         return new LinkedHashSet<>(selected);
     }
 
+    public PcView getPc(String pcId) {
+        return latestPcs.get(pcId);
+    }
+
     public void clearSelection() {
         for (String id : selected) {
             PcTile tile = tiles.get(id);
@@ -68,6 +73,7 @@ public class SeatMapPanel extends JPanel implements LabListener {
     }
 
     private void addOrUpdateTile(PcView pc) {
+        latestPcs.put(pc.id(), pc);
         PcTile tile = tiles.get(pc.id());
         if (tile == null) {
             tile = new PcTile(pc, this::onTileClicked);
