@@ -24,6 +24,8 @@ import java.util.function.Consumer;
 public class Sidebar extends JPanel {
 
     private static final Font ICON_FONT = new Font("Segoe UI Emoji", Font.PLAIN, 17);
+    private static final int RAIL_WIDTH = 48;
+    private static final int RAIL_HEIGHT = 40;
 
     public Sidebar(Consumer<Boolean> onLiveToggle, Consumer<Boolean> onLogToggle, Runnable onInfo, Runnable onExit) {
         setPreferredSize(new Dimension(68, 0));
@@ -81,7 +83,7 @@ public class Sidebar extends JPanel {
     }
 
     private JComponent actionButton(String glyph, String tooltip, boolean highlighted, Runnable onClick) {
-        JButton btn = new JButton(glyph) {
+        JButton btn = new JButton() {
             @Override
             protected void paintComponent(Graphics g) {
                 if (highlighted) {
@@ -90,6 +92,7 @@ public class Sidebar extends JPanel {
                     paintRailBackground(g, Theme.SIDEBAR_BG_HOVER);
                 }
                 super.paintComponent(g);
+                drawGlyph(g, glyph);
             }
         };
         styleRailButton(btn, tooltip);
@@ -100,7 +103,7 @@ public class Sidebar extends JPanel {
     }
 
     private JComponent toggleButton(String glyph, String tooltip, boolean initiallySelected, Consumer<Boolean> onToggle) {
-        JToggleButton btn = new JToggleButton(glyph) {
+        JToggleButton btn = new JToggleButton() {
             @Override
             protected void paintComponent(Graphics g) {
                 if (isSelected()) {
@@ -109,6 +112,7 @@ public class Sidebar extends JPanel {
                     paintRailBackground(g, Theme.SIDEBAR_BG_HOVER);
                 }
                 super.paintComponent(g);
+                drawGlyph(g, glyph);
             }
         };
         btn.setSelected(initiallySelected);
@@ -125,17 +129,27 @@ public class Sidebar extends JPanel {
         g2.dispose();
     }
 
+    private void drawGlyph(Graphics g, String glyph) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g2.setFont(ICON_FONT);
+        FontMetrics fm = g2.getFontMetrics();
+        int tx = (RAIL_WIDTH - fm.stringWidth(glyph)) / 2;
+        int ty = (RAIL_HEIGHT + fm.getAscent() - fm.getDescent()) / 2;
+        g2.drawString(glyph, tx, ty);
+        g2.dispose();
+    }
+
     private void styleRailButton(javax.swing.AbstractButton btn, String tooltip) {
-        btn.setFont(ICON_FONT);
-        btn.setForeground(Theme.SIDEBAR_ICON_ACTIVE);
         btn.setFocusPainted(false);
         btn.setContentAreaFilled(false);
         btn.setBorderPainted(false);
         btn.setOpaque(false);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.setAlignmentX(Component.CENTER_ALIGNMENT);
-        btn.setMaximumSize(new Dimension(48, 40));
-        btn.setPreferredSize(new Dimension(48, 40));
+        btn.setMaximumSize(new Dimension(RAIL_WIDTH, RAIL_HEIGHT));
+        btn.setPreferredSize(new Dimension(RAIL_WIDTH, RAIL_HEIGHT));
         btn.setToolTipText(tooltip);
     }
 }
