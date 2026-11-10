@@ -107,7 +107,7 @@ export default function App() {
     if (!ids.length) return;
     const r = await call(window.lab.send(ids, cmd, arg));
     const n = `${ids.length} PC${ids.length === 1 ? '' : 's'}`;
-    const done = { MSG: `Message sent to ${n}`, URL: `Link opened on ${n}`, LOCK: `Locked ${n}`, UNLOCK: `Unlocked ${n}`, SCREEN: `Sharing your screen with ${n}`, SCREENOFF: `Stopped sharing on ${n}`, BLOCK: `Blocked sites on ${n}`, UNBLOCK: `Unblocked sites on ${n}` };
+    const done = { MSG: `Message sent to ${n}`, URL: `Link opened on ${n}`, LOCK: `Locked ${n}`, UNLOCK: `Unlocked ${n}`, SCREEN: `Sharing your screen with ${n}`, SCREENOFF: `Stopped sharing on ${n}`, BLOCK: `Blocked sites on ${n}`, ALLOW: `${n} can now only open the sites you listed`, UNBLOCK: `Unblocked sites on ${n}` };
     if (r.ok) toast(done[cmd]);
   };
   const cardAction = (id, cmd) => {

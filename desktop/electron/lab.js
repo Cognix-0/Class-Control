@@ -4,7 +4,7 @@
 const net = require('node:net');
 const { EventEmitter } = require('node:events');
 
-const BROADCAST = new Set(['MSG', 'URL', 'LOCK', 'UNLOCK', 'BLOCK', 'UNBLOCK', 'SCREEN', 'SCREENOFF']);
+const BROADCAST = new Set(['MSG', 'URL', 'LOCK', 'UNLOCK', 'BLOCK', 'ALLOW', 'UNBLOCK', 'SCREEN', 'SCREENOFF']);
 const MAX_LINE = 8 * 1024 * 1024; // trust boundary: a client can't make us buffer forever
 const B64 = /^[A-Za-z0-9+/=]+$/;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
