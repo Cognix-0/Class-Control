@@ -1,0 +1,50 @@
+{
+  "name": "class-control",
+  "productName": "Class Control",
+  "version": "1.0.0",
+  "description": "Instructor desktop app for Class Control lab management",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "start": "node node_modules/vite/bin/vite.js build && node node_modules/electron/cli.js .",
+    "build": "node node_modules/vite/bin/vite.js build",
+    "test": "node --test test/lab.test.js test/seating.test.mjs",
+    "dist": "node node_modules/vite/bin/vite.js build && node node_modules/electron-builder/cli.js"
+  },
+  "build": {
+    "appId": "lk.classcontrol.instructor",
+    "productName": "Class Control",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.education"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
+    "lucide-react": "^1.71.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "vite": "^8.3.7"
+  }
+}
