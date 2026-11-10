@@ -10,13 +10,28 @@ import java.util.regex.Pattern;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.util.*;
+import java.util.List;
+import java.util.concurrent.*;
 
-/** Student agent. Run as Administrator (hosts file): java Agent.java <teacherIP> <token> */
+/**
+ * Student agent (Java 17+). Run as Administrator on Windows (hosts file, firewall, policies):
+ *   java Agent.java                       finds the instructor on the LAN by itself (asks for the class password once)
+ *   java Agent.java <teacherIP|auto> <token> [port]
+ */
 public class Agent {
     static final Path HOSTS = Path.of(System.getenv().getOrDefault("SystemRoot", "C:\\Windows"),
             "System32", "drivers", "etc", "hosts");
     static final String BEGIN = "# CLASSROOM-BEGIN", END = "# CLASSROOM-END";
-    static JFrame lock, view;
+    static final int DISCOVERY_PORT = 5758;   // UDP: the instructor announces itself here
+    static final int FILTER_PORT = 5760;      // loopback web filter (falls back to a free port)
+    static final Path CONFIG = Path.of(System.getProperty("user.home"), ".classcontrol-agent.properties");
+    static final java.util.List<JFrame> locks = new ArrayList<>();
+    static javax.swing.Timer lockTimer;
+    static JFrame view;
+    static volatile String token;
     static JLabel viewLabel;
     static volatile PrintWriter toTeacher;
     static volatile int viewFps;          // > 0 while the instructor's remote view is open
@@ -39,11 +54,14 @@ public class Agent {
     }
 
     public static void main(String[] a) throws Exception {
-        String host = a.length > 0 ? a[0] : JOptionPane.showInputDialog("Teacher PC address (IP):");
-        String token = a.length > 1 ? a[1] : JOptionPane.showInputDialog("Class password:");
-        if (host == null || token == null) return;
-        int port = a.length > 2 ? Integer.parseInt(a[2]) : 5757;
+        String host = a.length > 0 ? a[0] : "auto";
+        token = a.length > 1 ? a[1] : savedToken();
+        if (token == null) token = askPassword("Class password (ask your instructor):");
+        if (token == null || token.isEmpty()) return;
+        int fixedPort = a.length > 2 ? Integer.parseInt(a[2]) : 5757;
         String me = System.getenv().getOrDefault("COMPUTERNAME", "student");
+        Runtime.getRuntime().addShutdownHook(new Thread(Agent::releaseAll));
+        releaseAll(); // a crashed agent may have left rules behind; the instructor's server re-applies the real ones on connect
         SwingUtilities.invokeLater(() -> {
             JFrame f = new JFrame("Classroom Control - Student (" + me + ")");
             status.setFont(status.getFont().deriveFont(Font.BOLD, 16f));
@@ -52,33 +70,129 @@ public class Agent {
             f.add(status, BorderLayout.NORTH);
             f.add(new JScrollPane(logArea), BorderLayout.CENTER);
             f.setSize(420, 300);
-            f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            f.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); // students can't just close it
+            f.addWindowListener(new WindowAdapter() {
+                @Override public void windowClosing(WindowEvent e) {
+                    if (token.equals(askPassword("Enter the class password to close the agent:"))) System.exit(0);
+                }
+            });
             f.setVisible(true);
         });
-        log("Agent started, teacher=" + host + ":" + port);
+        log("Agent started, " + (host.equals("auto") ? "looking for the instructor on this network" : "teacher=" + host + ":" + fixedPort));
+        Map<String, Long> skip = new HashMap<>(); // instructors that rejected our password, ignored for a minute
+        int rejects = 0;
         while (true) { // reconnect forever so a teacher restart doesn't strand the PC
-            setStatus("Connecting to " + host + "...", Color.GRAY);
-            try (Socket s = new Socket(host, port)) {
-                setStatus("Connected to teacher (" + host + ")", new Color(0, 130, 0));
-                log("Connected as " + me);
+            String h = host;
+            int port = fixedPort;
+            String who = host;
+            if (host.equals("auto")) {
+                setStatus("Looking for your instructor...", Color.GRAY);
+                String[] found = discover(5000, skip);
+                if (found == null) continue;
+                h = found[0];
+                port = Integer.parseInt(found[1]);
+                who = found[2] + " (" + h + ")";
+            }
+            setStatus("Connecting to " + who + "...", Color.GRAY);
+            long connectedAt = System.currentTimeMillis();
+            try (Socket s = new Socket(h, port)) {
+                s.setKeepAlive(true);
+                setStatus("Connected to " + who, new Color(0, 130, 0));
+                log("Connected to " + who + " as " + me);
                 PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"), true);
                 out.println(token + "\t" + me);
                 toTeacher = out;
+                new Thread(() -> { // still connected after 3 s: the password was accepted, remember it
+                    try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
+                    if (!s.isClosed()) saveToken(token);
+                }).start();
                 BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));
                 for (String line; (line = in.readLine()) != null; ) {
-                    if (!line.matches("(SCREEN|THUMB|MOUSE|KEY|VIEW)\\b.*")) log("Teacher: " + line.replace("\t", " "));
+                    if (!line.matches("(SCREEN|THUMB|MOUSE|KEY|VIEW|WB)\\b.*")) log("Teacher: " + line.replace("\t", " "));
                     handle(line.split("\t", 2));
                 }
-                setStatus("Disconnected - wrong password?", Color.RED);
-                log("Teacher closed the connection (wrong password?)");
+                log("Teacher closed the connection");
             } catch (IOException e) {
                 setStatus("Cannot reach teacher - retrying", Color.RED);
-                log("Cannot reach " + host + ":" + port + " - " + e.getMessage());
+                log("Cannot reach " + who + " - " + e.getMessage());
             }
             toTeacher = null;
             stopView(); // teacher gone: never leave the "being viewed" stream or banner running
+            SwingUtilities.invokeLater(() -> { hideView(); Board.apply("off"); });
+            if (System.currentTimeMillis() - connectedAt < 3000) { // dropped straight away: almost always a wrong password
+                skip.put(h, System.currentTimeMillis() + 60_000);
+                setStatus("Rejected - wrong password?", Color.RED);
+                if (++rejects >= 3) {
+                    rejects = 0;
+                    try { Files.deleteIfExists(CONFIG); } catch (IOException ignored) { }
+                    String t = askPassword("The instructor rejected the password. Enter the class password again:");
+                    if (t == null) return;
+                    token = t;
+                }
+            } else rejects = 0;
             Thread.sleep(3000);
         }
+    }
+
+    // ---- discovery (UDP beacon from the instructor, see LabServer.startBeacon) ----
+
+    /** Waits up to timeoutMs for a beacon from an instructor we haven't been rejected by: {ip, tcpPort, name}, or null. */
+    static String[] discover(int timeoutMs, Map<String, Long> skip) {
+        try (DatagramSocket ds = new DatagramSocket(null)) {
+            ds.setReuseAddress(true);
+            ds.bind(new InetSocketAddress(DISCOVERY_PORT));
+            byte[] buf = new byte[512];
+            for (long end = System.currentTimeMillis() + timeoutMs; System.currentTimeMillis() < end; ) {
+                ds.setSoTimeout((int) Math.max(1, end - System.currentTimeMillis()));
+                DatagramPacket pk = new DatagramPacket(buf, buf.length);
+                ds.receive(pk);
+                String[] b = parseBeacon(new String(pk.getData(), 0, pk.getLength(), StandardCharsets.UTF_8), pk.getAddress().getHostAddress());
+                if (b != null && skip.getOrDefault(b[0], 0L) < System.currentTimeMillis()) return b;
+            }
+        } catch (SocketTimeoutException e) {
+            // nobody announced themselves yet
+        } catch (IOException e) {
+            log("Discovery problem: " + e.getMessage());
+            try { Thread.sleep(3000); } catch (InterruptedException ignored) { }
+        }
+        return null;
+    }
+
+    /** "CCLASS1\t<tcpPort>\t<name>" -> {from, port, name}; anything else (other broadcasts, junk) -> null. */
+    static String[] parseBeacon(String msg, String from) {
+        String[] p = msg.split("\t", 3);
+        if (p.length < 3 || !p[0].equals("CCLASS1")) return null;
+        try {
+            int port = Integer.parseInt(p[1].trim());
+            return port < 1 || port > 65535 ? null : new String[]{from, "" + port, p[2].trim()};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    static String savedToken() {
+        try (InputStream in = Files.newInputStream(CONFIG)) {
+            Properties pr = new Properties();
+            pr.load(in);
+            return pr.getProperty("token");
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    // shortcut: the saved class password sits in the user's profile in plain text; a lab rollout should pre-seed a locked-down file
+    static void saveToken(String t) {
+        try (OutputStream out = Files.newOutputStream(CONFIG)) {
+            Properties pr = new Properties();
+            pr.setProperty("token", t);
+            pr.store(out, "Class Control agent");
+        } catch (IOException ignored) { }
+    }
+
+    static String askPassword(String prompt) {
+        JPasswordField pf = new JPasswordField(20);
+        int r = JOptionPane.showConfirmDialog(null, new Object[]{prompt, pf}, "Class Control", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        return r == JOptionPane.OK_OPTION ? new String(pf.getPassword()) : null;
     }
 
     static void handle(String[] p) {
@@ -91,8 +205,10 @@ public class Agent {
                 case "SCREEN" -> { var img = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(arg))); SwingUtilities.invokeLater(() -> show(img)); }
                 case "SCREENOFF" -> SwingUtilities.invokeLater(Agent::hideView);
                 case "UNLOCK" -> SwingUtilities.invokeLater(Agent::unlock);
-                case "BLOCK" -> block(arg);
-                case "UNBLOCK" -> block("");
+                case "BLOCK" -> setWeb("BLOCK", arg);
+                case "ALLOW" -> setWeb("ALLOW", arg);
+                case "UNBLOCK" -> setWeb(null, "");
+                case "WB" -> SwingUtilities.invokeLater(() -> Board.apply(arg));
                 case "THUMB" -> toTeacher.println("THUMB\t" + capture(320));
                 case "VIEW" -> startView(Integer.parseInt(arg));
                 case "VIEWOFF" -> stopView();
@@ -208,18 +324,28 @@ public class Agent {
         });
     }
 
+    /** Black screen on every monitor that keeps grabbing focus back, plus the keyboard/policy lockdown (Kiosk). */
     static void lock(String msg) {
-        if (lock != null) return;
-        lock = new JFrame();
-        lock.setUndecorated(true);
-        lock.setAlwaysOnTop(true);
-        lock.getContentPane().setBackground(Color.BLACK);
-        JLabel l = new JLabel(msg, SwingConstants.CENTER);
-        l.setForeground(Color.WHITE);
-        l.setFont(l.getFont().deriveFont(36f));
-        lock.add(l);
-        GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().setFullScreenWindow(lock);
-        // shortcut: Ctrl+Alt+Del / Task Manager can still escape the lock; harden with a kiosk policy if needed
+        if (!locks.isEmpty()) return;
+        for (GraphicsDevice d : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+            JFrame f = new JFrame(d.getDefaultConfiguration());
+            f.setUndecorated(true);
+            f.setAlwaysOnTop(true);
+            f.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+            f.getContentPane().setBackground(Color.BLACK);
+            JLabel l = new JLabel(msg, SwingConstants.CENTER);
+            l.setForeground(Color.WHITE);
+            l.setFont(l.getFont().deriveFont(36f));
+            f.add(l);
+            d.setFullScreenWindow(f);
+            locks.add(f);
+        }
+        lockTimer = new javax.swing.Timer(200, e -> {
+            for (JFrame f : locks) { f.toFront(); f.requestFocus(); }
+            Board.toFront(); // a whiteboard shown to a locked class stays above the lock
+        });
+        lockTimer.start();
+        new Thread(Kiosk::on, "kiosk-on").start();
     }
 
     static void show(java.awt.image.BufferedImage img) {
@@ -242,7 +368,16 @@ public class Agent {
     }
 
     static void unlock() {
-        if (lock != null) { lock.dispose(); lock = null; }
+        if (lockTimer != null) lockTimer.stop();
+        for (JFrame f : locks) f.dispose();
+        locks.clear();
+        new Thread(Kiosk::off, "kiosk-off").start();
+    }
+
+    /** Take every restriction off this PC (unlock, web rules, whiteboard). Safe to call any time. */
+    static void releaseAll() {
+        Kiosk.off();
+        clearWeb();
     }
 
     /** Rewrites our marked block in the hosts file; empty list removes it. */
@@ -260,5 +395,444 @@ public class Agent {
             sb.append(END).append("\r\n");
         }
         Files.writeString(HOSTS, sb.toString(), StandardCharsets.UTF_8);
+    }
+
+    // ---- web filtering ----
+
+    static WebFilter filter;
+
+    /** mode BLOCK (listed sites denied), ALLOW (only listed sites reachable) or null (everything open). */
+    static synchronized void setWeb(String mode, String sites) {
+        clearWeb();
+        if (mode == null) { log("Web access: open"); return; }
+        java.util.List<String> domains = new ArrayList<>();
+        for (String d : sites.split("[,\\s]+")) if (d.matches("[A-Za-z0-9.-]+")) domains.add(d.toLowerCase(Locale.ROOT)); // trust boundary
+        if (domains.isEmpty()) { log("No valid sites in: " + sites); return; }
+        try {
+            try { filter = new WebFilter(mode.equals("ALLOW"), domains, FILTER_PORT); }
+            catch (BindException busy) { filter = new WebFilter(mode.equals("ALLOW"), domains, 0); }
+            Enforce.on(filter.port());
+            if (mode.equals("BLOCK")) { try { block(String.join(",", domains)); } catch (IOException e) { log("Hosts file not changed: " + e.getMessage()); } }
+            log("Web access: " + (mode.equals("ALLOW") ? "only " : "blocked ") + String.join(", ", domains));
+        } catch (IOException e) {
+            log("Web filter could not start: " + e.getMessage());
+        }
+    }
+
+    static synchronized void clearWeb() {
+        if (filter != null) { filter.close(); filter = null; }
+        Enforce.off();
+        try { if (Files.exists(HOSTS)) block(""); } catch (IOException ignored) { }
+    }
+
+    static int run(String... cmd) {
+        try {
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            if (!p.waitFor(20, TimeUnit.SECONDS)) { p.destroyForcibly(); return -1; }
+            return p.exitValue();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    static String runOut(String... cmd) {
+        try {
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            p.waitFor(20, TimeUnit.SECONDS);
+            return out;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * Local HTTP/HTTPS forward proxy on 127.0.0.1. Browsers are pointed at it (Enforce), so every request reaches
+     * us with its destination host: CONNECT host:443 for HTTPS, absolute-URI requests for HTTP. Each connection
+     * carries exactly one request/tunnel, so every request is checked.
+     */
+    static final class WebFilter implements Closeable {
+        final boolean allowOnly;
+        final java.util.List<String> domains;
+        final Set<String> blockedIps = ConcurrentHashMap.newKeySet(); // block mode: closes "https://<ip of the site>"
+        final ServerSocket server;
+        final ExecutorService pool = Executors.newCachedThreadPool(r -> { Thread t = new Thread(r, "web-filter"); t.setDaemon(true); return t; });
+
+        WebFilter(boolean allowOnly, java.util.List<String> domains, int port) throws IOException {
+            this.allowOnly = allowOnly;
+            this.domains = List.copyOf(domains);
+            this.server = new ServerSocket(port, 50, InetAddress.getLoopbackAddress()); // loopback only: not an open proxy
+            if (!allowOnly) pool.execute(this::resolveBlocked);
+            pool.execute(this::acceptLoop);
+        }
+
+        int port() { return server.getLocalPort(); }
+
+        /** Is `host` reachable under the current rules? Subdomains follow their parent domain. */
+        boolean allowed(String host) {
+            String h = host.toLowerCase(Locale.ROOT);
+            if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length() - 1);
+            if (h.endsWith(".")) h = h.substring(0, h.length() - 1);
+            if (h.contains(":") || h.matches("\\d{1,3}(\\.\\d{1,3}){3}")) return !allowOnly && !blockedIps.contains(h); // raw IPs can't be matched to a domain
+            boolean listed = false;
+            for (String d : domains) if (h.equals(d) || h.endsWith("." + d)) { listed = true; break; }
+            return allowOnly == listed;
+        }
+
+        private void resolveBlocked() {
+            for (String d : domains) {
+                for (String n : new String[]{d, "www." + d}) {
+                    try { for (InetAddress ia : InetAddress.getAllByName(n)) blockedIps.add(ia.getHostAddress().toLowerCase(Locale.ROOT)); }
+                    catch (UnknownHostException ignored) { }
+                }
+            }
+        }
+
+        private void acceptLoop() {
+            while (!server.isClosed()) {
+                try {
+                    Socket c = server.accept();
+                    pool.execute(() -> handle(c));
+                } catch (IOException e) {
+                    return;
+                }
+            }
+        }
+
+        private void handle(Socket c) {
+            try (c) {
+                c.setSoTimeout(15_000); // request head must arrive promptly
+                OutputStream out = c.getOutputStream();
+                byte[] head = readHead(c.getInputStream());
+                if (head == null) { reply(out, 400); return; }
+                String text = new String(head, StandardCharsets.ISO_8859_1);
+                String[] lines = text.split("\r\n");
+                String[] rl = lines[0].split(" ");
+                if (rl.length != 3) { reply(out, 400); return; }
+                String method = rl[0], version = rl[2], host, path = null;
+                int port;
+                if (method.equalsIgnoreCase("CONNECT")) {
+                    int i = rl[1].lastIndexOf(':');
+                    if (i <= 0) { reply(out, 400); return; }
+                    host = rl[1].substring(0, i);
+                    port = Integer.parseInt(rl[1].substring(i + 1));
+                } else {
+                    URI u = URI.create(rl[1]);
+                    if (!"http".equalsIgnoreCase(u.getScheme()) || u.getHost() == null) { reply(out, 400); return; }
+                    host = u.getHost();
+                    port = u.getPort() < 0 ? 80 : u.getPort();
+                    path = (u.getRawPath() == null || u.getRawPath().isEmpty() ? "/" : u.getRawPath()) + (u.getRawQuery() == null ? "" : "?" + u.getRawQuery());
+                }
+                if (port < 1 || port > 65535) { reply(out, 400); return; }
+                if (!allowed(host)) { log("Blocked " + host); reply(out, 403); return; }
+                try (Socket up = new Socket()) {
+                    try { up.connect(new InetSocketAddress(host, port), 10_000); } catch (IOException e) { reply(out, 502); return; }
+                    if (path == null) {
+                        out.write("HTTP/1.1 200 Connection Established\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+                        out.flush();
+                    } else { // plain HTTP: send the request on in origin form, one request per connection
+                        StringBuilder req = new StringBuilder(method).append(' ').append(path).append(' ').append(version).append("\r\n");
+                        for (int i = 1; i < lines.length; i++) {
+                            String n = lines[i].toLowerCase(Locale.ROOT);
+                            if (lines[i].isEmpty() || n.startsWith("proxy-") || n.startsWith("connection:") || n.startsWith("keep-alive:")) continue;
+                            req.append(lines[i]).append("\r\n");
+                        }
+                        req.append("Connection: close\r\n\r\n");
+                        up.getOutputStream().write(req.toString().getBytes(StandardCharsets.ISO_8859_1));
+                    } // shortcut: plain-HTTP Upgrade (ws://) is not supported, wss:// goes through CONNECT and works
+                    c.setSoTimeout(0);
+                    pipe(c, up);
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // bad request or peer reset: the connection just ends
+            }
+        }
+
+        /** Request head up to and including the blank line, read byte by byte so no body bytes are consumed. */
+        static byte[] readHead(InputStream in) throws IOException {
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            int state = 0; // progress through \r\n\r\n
+            for (int ch; (ch = in.read()) != -1; ) {
+                b.write(ch);
+                if (b.size() > 16 * 1024) return null;
+                state = (ch == '\r' && (state == 0 || state == 2)) || (ch == '\n' && (state == 1 || state == 3)) ? state + 1 : (ch == '\r' ? 1 : 0);
+                if (state == 4) return b.toByteArray();
+            }
+            return null;
+        }
+
+        private static void reply(OutputStream out, int code) throws IOException {
+            String reason = code == 403 ? "Forbidden" : code == 400 ? "Bad Request" : "Bad Gateway";
+            String msg = code == 403 ? "This site is blocked by your instructor." : "The request could not be completed.";
+            byte[] body = ("<html><body style='font-family:sans-serif;text-align:center;margin-top:20vh'><h1>" + reason + "</h1><p>" + msg + "</p></body></html>").getBytes(StandardCharsets.UTF_8);
+            out.write(("HTTP/1.1 " + code + " " + reason + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
+            out.write(body);
+            out.flush();
+        }
+
+        /** Copy both directions until one side ends, give the other 15 s to finish, then close both. */
+        private void pipe(Socket a, Socket b) {
+            CompletableFuture<Void> f1 = CompletableFuture.runAsync(() -> copy(a, b), pool);
+            CompletableFuture<Void> f2 = CompletableFuture.runAsync(() -> copy(b, a), pool);
+            try {
+                CompletableFuture.anyOf(f1, f2).join();
+                CompletableFuture.allOf(f1, f2).get(15, TimeUnit.SECONDS);
+            } catch (Exception ignored) { }
+            try { a.close(); } catch (IOException ignored) { }
+            try { b.close(); } catch (IOException ignored) { }
+        }
+
+        private static void copy(Socket from, Socket to) {
+            byte[] buf = new byte[16 * 1024];
+            try {
+                InputStream in = from.getInputStream();
+                OutputStream out = to.getOutputStream();
+                for (int n; (n = in.read(buf)) != -1; ) { out.write(buf, 0, n); out.flush(); }
+                to.shutdownOutput();
+            } catch (IOException ignored) { }
+        }
+
+        @Override public void close() {
+            try { server.close(); } catch (IOException ignored) { }
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * Windows enforcement for the web filter: points the system proxy at it and stops known browsers from connecting
+     * directly (loopback to the proxy is not filtered by Windows Firewall). Original proxy settings are saved to a file so
+     * they survive an agent crash and can be restored on the next start.
+     */
+    static final class Enforce {
+        static final boolean WIN = System.getProperty("os.name").startsWith("Windows");
+        static final String INET = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+        static final Path BACKUP = Path.of(System.getProperty("user.home"), ".classcontrol-proxy-backup.properties");
+        static final String[] KEYS = {"ProxyEnable", "ProxyServer", "ProxyOverride", "AutoConfigURL", "AutoDetect"};
+
+        static synchronized void on(int port) {
+            if (!WIN) return; // dev machines: the filter runs but nothing points at it
+            if (!Files.exists(BACKUP)) saveOriginals();
+            run("reg", "add", INET, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f");
+            run("reg", "add", INET, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "127.0.0.1:" + port, "/f");
+            run("reg", "add", INET, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "localhost;127.0.0.1", "/f");
+            run("reg", "add", INET, "/v", "AutoDetect", "/t", "REG_DWORD", "/d", "0", "/f");
+            run("reg", "delete", INET, "/v", "AutoConfigURL", "/f");
+            StringBuilder ps = new StringBuilder();
+            for (Path exe : browsers()) {
+                ps.append("New-NetFirewallRule -DisplayName 'ClassControl-").append(exe.getFileName()).append("-").append(Integer.toHexString(exe.toString().hashCode()))
+                  .append("' -Direction Outbound -Action Block -Profile Any -Program '").append(exe.toString().replace("'", "''")).append("' | Out-Null; ");
+            }
+            if (ps.length() > 0) run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps.toString());
+        }
+
+        static synchronized void off() {
+            if (!WIN) return;
+            run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                    "Get-NetFirewallRule -DisplayName 'ClassControl-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule");
+            if (!Files.exists(BACKUP)) return;
+            Properties pr = new Properties();
+            try (InputStream in = Files.newInputStream(BACKUP)) { pr.load(in); } catch (IOException e) { return; }
+            for (String k : KEYS) {
+                String v = pr.getProperty(k, "absent");
+                if (v.equals("absent")) run("reg", "delete", INET, "/v", k, "/f");
+                else { String[] tv = v.split("\\|", 2); run("reg", "add", INET, "/v", k, "/t", tv[0], "/d", tv[1], "/f"); }
+            }
+            try { Files.deleteIfExists(BACKUP); } catch (IOException ignored) { }
+        }
+
+        static void saveOriginals() {
+            Properties pr = new Properties();
+            for (String k : KEYS) {
+                String v = "absent";
+                for (String line : runOut("reg", "query", INET, "/v", k).split("\\R")) {
+                    String[] f = line.trim().split("\\s{2,}", 3);
+                    if (f.length == 3 && f[0].equals(k)) v = f[1] + "|" + f[2];
+                }
+                pr.setProperty(k, v);
+            }
+            try (OutputStream out = Files.newOutputStream(BACKUP)) { pr.store(out, "proxy settings before Class Control"); } catch (IOException ignored) { }
+        }
+
+        /** Installed browsers worth blocking. shortcut: portable or renamed browsers are not found, use AppLocker for those. */
+        static java.util.List<Path> browsers() {
+            String[] roots = {System.getenv("ProgramFiles"), System.getenv("ProgramFiles(x86)"), System.getenv("LOCALAPPDATA")};
+            String[] rel = {"Google\\Chrome\\Application\\chrome.exe", "Microsoft\\Edge\\Application\\msedge.exe", "Mozilla Firefox\\firefox.exe",
+                    "BraveSoftware\\Brave-Browser\\Application\\brave.exe", "Vivaldi\\Application\\vivaldi.exe", "Opera\\opera.exe",
+                    "Opera\\launcher.exe", "Programs\\Opera\\opera.exe", "Programs\\Opera\\launcher.exe", "Internet Explorer\\iexplore.exe",
+                    "Chromium\\Application\\chrome.exe"};
+            java.util.List<Path> found = new ArrayList<>();
+            for (String root : roots) {
+                if (root == null) continue;
+                for (String r : rel) { Path p = Path.of(root, r); if (Files.exists(p) && !found.contains(p)) found.add(p); }
+            }
+            return found;
+        }
+    }
+
+    // ---- lock-down while the screen is locked ----
+
+    /**
+     * Stops a locked student leaving the lock screen: a hidden PowerShell helper runs a low-level keyboard hook that
+     * swallows the Windows key (Start, Win+Tab, Win+Ctrl+arrows = switching desktops), Alt+Tab, Alt+Esc, Alt+F4,
+     * Ctrl+Esc and Ctrl+Shift+Esc; policies hide Task Manager, Lock, Sign out and Shut down. Ctrl+Alt+Del itself
+     * cannot be blocked by any program. The helper only blocks keys, it never records them.
+     */
+    static final class Kiosk {
+        static final boolean WIN = System.getProperty("os.name").startsWith("Windows");
+        static final String SYS = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
+        static final String EXP = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
+        static final String[][] POLICIES = {{SYS, "DisableTaskMgr"}, {SYS, "DisableLockWorkstation"}, {SYS, "DisableChangePassword"},
+                {EXP, "NoLogoff"}, {EXP, "NoClose"}};
+        static Process hook;
+
+        static final String HOOK_PS1 = """
+                param([int]$ParentPid)
+                $src = @'
+                using System;
+                using System.Diagnostics;
+                using System.Runtime.InteropServices;
+                using System.Windows.Forms;
+                public static class KioskHook {
+                    delegate IntPtr Proc(int code, IntPtr w, IntPtr l);
+                    static Proc proc = Callback;   // keep a reference so the garbage collector never frees the callback
+                    static IntPtr hook;
+                    [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, Proc fn, IntPtr module, uint thread);
+                    [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
+                    [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr w, IntPtr l);
+                    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+                    [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
+                    static IntPtr Callback(int code, IntPtr w, IntPtr l) {
+                        if (code >= 0) {
+                            int vk = Marshal.ReadInt32(l);                    // KBDLLHOOKSTRUCT.vkCode
+                            int flags = Marshal.ReadInt32(l, 8);              // KBDLLHOOKSTRUCT.flags
+                            bool injected = (flags & 0x10) != 0;              // sent by software, e.g. the instructor's remote control
+                            bool alt = (flags & 0x20) != 0;
+                            bool ctrl = (GetAsyncKeyState(0x11) & 0x8000) != 0;
+                            bool shift = (GetAsyncKeyState(0x10) & 0x8000) != 0;
+                            bool block = vk == 0x5B || vk == 0x5C                                  // Windows keys
+                                || (alt && (vk == 0x09 || vk == 0x1B || vk == 0x73))               // Alt+Tab, Alt+Esc, Alt+F4
+                                || (ctrl && vk == 0x1B)                                            // Ctrl+Esc, Ctrl+Shift+Esc
+                                || (ctrl && shift && vk == 0x1B);
+                            if (block && !injected) return (IntPtr)1;
+                        }
+                        return CallNextHookEx(hook, code, w, l);
+                    }
+                    public static void Run(int parentPid) {
+                        hook = SetWindowsHookEx(13, proc, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);
+                        System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
+                        t.Interval = 1000;
+                        t.Tick += delegate { try { Process.GetProcessById(parentPid); } catch (ArgumentException) { Application.Exit(); } };
+                        t.Start();                                                                 // agent gone: stop blocking keys
+                        Application.Run();
+                        UnhookWindowsHookEx(hook);
+                    }
+                }
+                '@
+                Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition $src
+                [KioskHook]::Run($ParentPid)
+                """;
+
+        static synchronized void on() {
+            if (!WIN) return;
+            for (String[] p : POLICIES) run("reg", "add", p[0], "/v", p[1], "/t", "REG_DWORD", "/d", "1", "/f");
+            if (hook != null && hook.isAlive()) return;
+            try {
+                Path script = Files.createTempFile("cc-kiosk", ".ps1");
+                script.toFile().deleteOnExit();
+                Files.writeString(script, HOOK_PS1, StandardCharsets.UTF_8);
+                hook = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+                        "-File", script.toString(), String.valueOf(ProcessHandle.current().pid()))
+                        .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            } catch (IOException e) {
+                log("Keyboard lock could not start: " + e.getMessage());
+            }
+        }
+
+        static synchronized void off() {
+            if (hook != null) { hook.destroyForcibly(); hook = null; }
+            if (!WIN) return;
+            for (String[] p : POLICIES) run("reg", "delete", p[0], "/v", p[1], "/f");
+        }
+    }
+
+    // ---- whiteboard ----
+
+    /**
+     * The instructor's whiteboard, fullscreen and read-only. Strokes arrive as WB lines (beg/add/end/clear/off) with
+     * coordinates and widths as fractions of a 16:9 board, so it looks the same on every screen size.
+     */
+    @SuppressWarnings("serial")
+    static final class Board extends JPanel {
+        record Line(Color color, double width, java.util.List<double[]> pts) { }
+
+        static JFrame frame;
+        static Board board;
+        final java.util.List<Line> lines = new ArrayList<>();
+        Line current;
+        int points;
+
+        static void apply(String arg) { // call on the Swing thread
+            if (arg.equals("off")) {
+                if (frame != null) { frame.dispose(); frame = null; board = null; }
+                return;
+            }
+            if (frame == null) {
+                board = new Board();
+                board.setBackground(new Color(30, 32, 36));
+                frame = new JFrame();
+                frame.setUndecorated(true);
+                frame.setAlwaysOnTop(true);
+                frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+                frame.add(board);
+                GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().setFullScreenWindow(frame);
+            }
+            board.update(arg);
+        }
+
+        static void toFront() { if (frame != null) frame.toFront(); }
+
+        void update(String arg) {
+            String[] p = arg.split(",");
+            try {
+                switch (p[0]) {
+                    case "beg" -> {
+                        current = new Line(new Color(Integer.parseInt(p[1], 16)), Math.min(0.1, Double.parseDouble(p[2])), new ArrayList<>());
+                        lines.add(current);
+                        add(p[3], p[4]);
+                    }
+                    case "add" -> { if (current != null) for (int i = 1; i + 1 < p.length; i += 2) add(p[i], p[i + 1]); }
+                    case "end" -> current = null;
+                    case "clear" -> { lines.clear(); current = null; points = 0; }
+                    default -> { }
+                }
+            } catch (NumberFormatException ignored) { } // the server already validates; a bad line just draws nothing
+            repaint();
+        }
+
+        private void add(String x, String y) {
+            if (points++ > 200_000) return; // cap memory
+            current.pts().add(new double[]{Math.max(0, Math.min(1, Double.parseDouble(x))), Math.max(0, Math.min(1, Double.parseDouble(y)))});
+        }
+
+        @Override protected void paintComponent(Graphics g0) {
+            super.paintComponent(g0);
+            Graphics2D g = (Graphics2D) g0;
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int bw = Math.min(getWidth(), getHeight() * 16 / 9), bh = bw * 9 / 16;
+            int ox = (getWidth() - bw) / 2, oy = (getHeight() - bh) / 2;
+            g.setColor(Color.WHITE);
+            g.fillRect(ox, oy, bw, bh);
+            g.setClip(ox, oy, bw, bh);
+            for (Line l : lines) {
+                g.setColor(l.color());
+                g.setStroke(new BasicStroke((float) Math.max(1, l.width() * bw), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                java.awt.geom.Path2D path = new java.awt.geom.Path2D.Double();
+                double[] a = l.pts().get(0);
+                path.moveTo(ox + a[0] * bw, oy + a[1] * bh);
+                if (l.pts().size() == 1) path.lineTo(ox + a[0] * bw + 0.01, oy + a[1] * bh); // a tap draws a dot
+                for (double[] q : l.pts()) path.lineTo(ox + q[0] * bw, oy + q[1] * bh);
+                g.draw(path);
+            }
+        }
     }
 }
