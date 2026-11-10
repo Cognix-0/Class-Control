@@ -57,7 +57,7 @@ export default function StartScreen({ onStarted }) {
         <button type="button" className="btn ghost" style={{ width: '100%', height: 40, justifyContent: 'center', marginTop: 10 }} disabled={busy} onClick={demo}>
           <FlaskConical size={16} /> Try demo with 18 simulated PCs
         </button>
-        <div className="hint">Student PCs run the Class Control agent and connect to this computer.</div>
+        <div className="hint">Student PCs on the same network find this class automatically. They only need the agent and the password above.</div>
       </form>
     </div>
   );

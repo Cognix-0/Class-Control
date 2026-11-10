@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node node_modules/vite/bin/vite.js build && node node_modules/electron/cli.js .",
     "build": "node node_modules/vite/bin/vite.js build",
-    "test": "node --test test/lab.test.js test/seating.test.mjs",
+    "test": "node --test test/lab.test.js test/javalab.test.js test/seating.test.mjs",
     "dist": "node node_modules/vite/bin/vite.js build && node node_modules/electron-builder/cli.js"
   },
   "build": {
@@ -17,6 +17,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "backend/*.java",
       "package.json"
     ],
     "mac": {
@@ -31,7 +32,10 @@
     },
     "directories": {
       "output": "release"
-    }
+    },
+    "asarUnpack": [
+      "backend/*.java"
+    ]
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",
