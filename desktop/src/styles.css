@@ -229,3 +229,13 @@ kbd { font-family: var(--mono); font-size: 10px; padding: 1px 5px; border-radius
 .remote-wait { text-align: center; color: var(--muted); max-width: 420px; }
 .live-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; background: rgba(239, 83, 80, .14); color: #ffaaa8; border: 1px solid rgba(239, 83, 80, .4); }
 .control-hint { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); padding: 6px 12px; border-radius: 8px; font-size: 12px; background: rgba(239, 83, 80, .16); border: 1px solid rgba(239, 83, 80, .45); color: #ffd0cf; pointer-events: none; }
+
+/* ---------- whiteboard ---------- */
+.board { position: fixed; inset: 0; z-index: 45; background: #07090b; flex-direction: column; }
+.board-bar { min-height: 54px; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--panel-solid); }
+.board-bar .title { display: flex; align-items: center; gap: 8px; font-weight: 700; margin-right: 6px; }
+.board-bar .sep { width: 1px; height: 24px; background: var(--line-soft); margin: 0 4px; }
+.board-stage { flex: 1; min-height: 0; display: grid; place-items: center; }
+.board-stage canvas { background: #fff; border-radius: 6px; box-shadow: 0 0 0 1px var(--line-soft), var(--shadow); cursor: crosshair; touch-action: none; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line-soft); cursor: pointer; padding: 0; }
+.swatch.on { border-color: var(--accent-hi); box-shadow: 0 0 0 2px var(--panel-solid) inset; }

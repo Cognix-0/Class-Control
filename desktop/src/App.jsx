@@ -9,6 +9,7 @@ import ActionDock from './components/ActionDock.jsx';
 import InfoCard from './components/InfoCard.jsx';
 import RemoteView from './components/RemoteView.jsx';
 import ActivityLog from './components/ActivityLog.jsx';
+import Whiteboard from './components/Whiteboard.jsx';
 import LayoutEditor from './components/LayoutEditor.jsx';
 import Toasts from './components/Toasts.jsx';
 import { allSeats, assignSeats } from './seating.js';
@@ -31,6 +32,8 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [remoteId, setRemoteId] = useState(null);
   const [dockRequest, setDockRequest] = useState(null);
+  const [boardLive, setBoardLive] = useState(false); // students are seeing the whiteboard
+  const [boardOpen, setBoardOpen] = useState(false); // the instructor's whiteboard editor is on screen
   const saveTimer = useRef(null);
 
   const toast = useCallback((msg, level = 'ok') => {
@@ -94,13 +97,13 @@ export default function App() {
 
   useEffect(() => {
     const f = (e) => {
-      if (remoteId || e.target.closest('input, textarea, select')) return;
+      if (remoteId || boardOpen || e.target.closest('input, textarea, select')) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); selectOnly(pcList.map((p) => p.id)); }
       else if (e.key === 'Escape') clear();
     };
     window.addEventListener('keydown', f);
     return () => window.removeEventListener('keydown', f);
-  }, [pcList, remoteId]);
+  }, [pcList, remoteId, boardOpen]);
 
   // ---- actions ----
   const send = async (cmd, arg, ids = [...selected]) => {
@@ -143,7 +146,8 @@ export default function App() {
   return (
     <div className="app">
       <TopBar online={online} total={pcList.length} live={live} onLive={toggleLive} view={view} onView={setView} onRecenter={() => pick(null)}
-        panel={panel} onPanel={setPanel} address={address} sharing={sharing.size} />
+        panel={panel} onPanel={setPanel} address={address} sharing={sharing.size}
+        boardLive={boardLive} onBoard={() => { setBoardLive(true); setBoardOpen(true); }} />
       <div className="stage-area">
         <div className="map">
           {view === '3d'
@@ -175,6 +179,7 @@ export default function App() {
         {panel === 'activity' && <ActivityLog logs={logs} onClear={() => setLogs([])} onClose={() => setPanel(null)} />}
         {panel === 'layout' && <LayoutEditor layout={layout} onChange={changeLayout} onClose={() => setPanel(null)} seatCount={seats.length} pcCount={pcList.length} />}
       </div>
+      {boardLive && <Whiteboard visible={boardOpen} onMinimise={() => setBoardOpen(false)} onStop={() => { setBoardLive(false); setBoardOpen(false); }} />}
       {remotePc && <RemoteView pc={remotePc} onClose={() => setRemoteId(null)} onSend={(cmd, arg) => send(cmd, arg, [remotePc.id])} />}
       <Toasts items={toasts} />
     </div>

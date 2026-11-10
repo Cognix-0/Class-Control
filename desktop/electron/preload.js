@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('lab', {
   list: () => ipcRenderer.invoke('lab:list'),
   send: (ids, cmd, arg) => ipcRenderer.invoke('lab:send', ids, cmd, arg),
   remote: (id, cmd, arg) => ipcRenderer.invoke('lab:remote', id, cmd, arg),
+  whiteboard: (arg) => ipcRenderer.invoke('lab:wb', arg),
   setLive: (on) => ipcRenderer.invoke('lab:live', on),
   getLayout: () => ipcRenderer.invoke('layout:get'),
   saveLayout: (l) => ipcRenderer.invoke('layout:save', l),
