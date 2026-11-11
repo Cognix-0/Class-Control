@@ -161,13 +161,13 @@ public class Agent {
         log("Teacher closed the connection");
     }
 
-    /** Teacher gone: never leave the "being viewed" stream, banner, shared screen or presentation running. */
+    /** Teacher gone: never leave the lock, "being viewed" stream, banner, shared screen or presentation running. */
     static void ended() {
         toTeacher = null;
         current = null;
         if (presenting) { presenting = false; emit("SHARING", "0"); }
         stopView();
-        SwingUtilities.invokeLater(() -> { hideView(); Board.apply("off"); });
+        SwingUtilities.invokeLater(() -> { hideView(); Board.apply("off"); unlock(); }); // the server re-sends LOCK on reconnect
     }
 
     // ---- --app mode: the student desktop app logs in and drives us over stdin ----
