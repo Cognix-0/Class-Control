@@ -9,9 +9,12 @@
     "start": "node node_modules/vite/bin/vite.js build && node node_modules/electron/cli.js .",
     "build": "node node_modules/vite/bin/vite.js build",
     "test": "node --test test/lab.test.js test/javalab.test.js test/seating.test.mjs",
-    "dist": "node node_modules/vite/bin/vite.js build && node node_modules/electron-builder/cli.js",
+    "dist": "npm run prepare:runtime && npm run build && node node_modules/electron-builder/cli.js --win --x64",
     "student": "node node_modules/vite/bin/vite.js build && node node_modules/electron/cli.js electron/student.js",
-    "dist:student": "node node_modules/vite/bin/vite.js build && node node_modules/electron-builder/cli.js -c.extraMetadata.main=electron/student.js -c.appId=lk.classcontrol.student \"-c.productName=Class Control Student\" -c.directories.output=release-student \"-c.extraResources=../Agent.java\""
+    "dist:student": "npm run prepare:runtime && npm run build && node node_modules/electron-builder/cli.js --config electron-builder.student.cjs --win --x64",
+    "prepare:runtime": "node scripts/prepare-runtime.cjs",
+    "dist:mac": "npm run prepare:runtime && npm run build && node node_modules/electron-builder/cli.js --mac --publish never",
+    "dist:student:mac": "npm run prepare:runtime && npm run build && node node_modules/electron-builder/cli.js --config electron-builder.student.cjs --mac --publish never"
   },
   "build": {
     "appId": "lk.classcontrol.instructor",
@@ -24,7 +27,8 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.education"
+      "category": "public.app-category.education",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     },
     "win": {
       "target": "nsis"
@@ -37,7 +41,20 @@
     },
     "asarUnpack": [
       "backend/*.java"
-    ]
+    ],
+    "extraResources": [
+      {
+        "to": "java",
+        "from": "build/java"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    }
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const DEFAULTS = require('./studentDefaults.json'); // the lab admin sets the instructor's address and class password here before building
+const { javaExecutable } = require('./javaRuntime');
 
 // Own data folder and single-instance lock, so it can run next to the instructor app on the same machine.
 app.setPath('userData', path.join(app.getPath('appData'), 'Class Control Student'));
@@ -45,7 +46,7 @@ function saveSettings(s) {
 const send = (e) => { if (win && !win.isDestroyed()) win.webContents.send('student:event', e); };
 
 function startAgent() {
-  agent = spawn('java', ['-Dapple.awt.UIElement=true', AGENT, '--app'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  agent = spawn(javaExecutable(), ['-Dapple.awt.UIElement=true', AGENT, '--app'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   const me = agent;
   me.stdin.on('error', () => {});
   me.stderr.on('data', (d) => console.error(String(d).trim()));

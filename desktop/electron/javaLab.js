@@ -5,6 +5,7 @@ const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const readline = require('node:readline');
+const { javaExecutable } = require('./javaRuntime');
 
 // Inside a packaged app the .java file is unpacked next to app.asar so `java` can read it.
 const SERVER = path.join(__dirname, '..', 'backend', 'LabServer.java').replace('app.asar', 'app.asar.unpacked');
@@ -28,7 +29,7 @@ class JavaLab extends EventEmitter {
     this.started = new Promise((resolve, reject) => {
       let err = '';
       let up = false;
-      const proc = spawn('java', ['-Dapple.awt.UIElement=true', SERVER], { stdio: ['pipe', 'pipe', 'pipe'] });
+      const proc = spawn(javaExecutable(), ['-Dapple.awt.UIElement=true', SERVER], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       this.proc = proc;
       proc.stdin.on('error', () => {});
       proc.stderr.setEncoding('utf8');
