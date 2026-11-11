@@ -145,7 +145,9 @@ export default function App() {
   };
   const reply = async (pcId, text) => {
     const r = await call(window.lab.send([pcId], 'MSG', text));
-    if (r.ok) setChats((c) => [...c, { id: ++seq, key: threadKey(pcs[pcId]), who: who(pcs[pcId]), from: 'me', text, at: Date.now() }]);
+    if (!r.ok) return;
+    setChats((c) => [...c, { id: ++seq, key: threadKey(pcs[pcId]), who: who(pcs[pcId]), from: 'me', text, at: Date.now() }]);
+    onHead(pcs[pcId]); // answered: the chat head over the desk goes away
   };
   // read = opened (keep the head, clear its count); otherwise the chat is done and the head goes away
   const onHead = (pc, read) => setHeads((h) => {
@@ -153,7 +155,7 @@ export default function App() {
     if (read) { if (n[k]) n[k] = { ...n[k], unread: 0 }; } else delete n[k];
     return n;
   });
-  const openPanel = (p) => { setPanel(p); if (p === 'messages') setUnread(0); };
+  const openPanel = (p) => { setPanel(p); if (p === 'messages') { setUnread(0); setHeads({}); } }; // all messages seen: no chat heads left
   const cardAction = async (id, cmd) => {
     if (cmd === 'MSG') { selectOnly([id]); setDockRequest({ cmd, n: ++seq }); }
     else if (cmd === 'PRESENT') present(id, '1');

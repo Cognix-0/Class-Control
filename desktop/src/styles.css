@@ -281,6 +281,4 @@ kbd { font-family: var(--mono); font-size: 10px; padding: 1px 5px; border-radius
 .chathead-card { width: 280px; padding: 10px; border-radius: 14px; border: 1px solid var(--accent); background: var(--panel-solid); box-shadow: var(--shadow); }
 .chathead-top { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
 .chathead-list { max-height: 180px; overflow: auto; }
-.chathead-done { display: block; width: 100%; margin-top: 8px; background: none; border: 0; color: var(--dim); font-size: 11px; cursor: pointer; }
-.chathead-done:hover { color: var(--text); }
 .chathead-top .chathead-av { order: 0; }

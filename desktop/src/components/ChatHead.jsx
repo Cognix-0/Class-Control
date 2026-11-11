@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Send, X } from 'lucide-react';
 
-// Chat head that pops up above a student's desk when they write. Click it to read and reply right there.
+// Chat head that pops up above a student's desk when they write. Click it to read and reply right there;
+// it goes away once the chat was viewed (closed) or answered.
 export default function ChatHead({ pc, head, messages, onReply, onDismiss }) {
   const [open, setOpen] = useState(false);
   const [peek, setPeek] = useState(true); // preview of the newest message, hides after a few seconds
@@ -25,17 +26,16 @@ export default function ChatHead({ pc, head, messages, onReply, onDismiss }) {
             <span className="chathead-av sm">{name.slice(0, 2)}</span>
             <b>{name}</b><span className="muted mono" style={{ fontSize: 10 }}>{pc.host !== name ? pc.host : ''}</span>
             <div className="spacer" />
-            <button className="btn ghost sm icon-btn" style={{ width: 26, height: 26 }} onClick={() => setOpen(false)} aria-label="Minimise"><X size={13} /></button>
+            <button className="btn ghost sm icon-btn" style={{ width: 26, height: 26 }} onClick={() => onDismiss(pc)} aria-label="Close chat"><X size={13} /></button>
           </div>
           <div className="chathead-list" ref={list}>
             {messages.map((m) => <div key={m.id} className={`bubble ${m.from}`}><span>{m.text}</span></div>)}
           </div>
           <form className="reply" onSubmit={(e) => { e.preventDefault(); if (text.trim()) { onReply(pc.id, text.trim()); setText(''); } }}>
             <input className="input" autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={`Reply to ${name}…`} aria-label="Reply"
-              onKeyDown={(e) => e.key === 'Escape' && setOpen(false)} />
+              onKeyDown={(e) => e.key === 'Escape' && onDismiss(pc)} />
             <button className="btn sm primary icon-btn" style={{ width: 34 }} disabled={!text.trim()} aria-label="Send"><Send size={13} /></button>
           </form>
-          <button className="chathead-done" onClick={() => onDismiss(pc)}>Done, close chat</button>
         </div>
       ) : (
         <button className="chathead-btn" onClick={() => { setOpen(true); onDismiss(pc, true); }} title={`Message from ${name}`}>
