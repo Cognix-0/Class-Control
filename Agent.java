@@ -20,6 +20,10 @@ import java.util.concurrent.*;
  * Student agent (Java 17+). Run as Administrator on Windows (hosts file, firewall, policies):
  *   java Agent.java                       finds the instructor on the LAN by itself (asks for the class password once)
  *   java Agent.java <teacherIP|auto> <token> [port]
+ *   java Agent.java --app                 driven by the student desktop app over stdin/stdout (no window, no dialogs):
+ *     stdin : CONNECT host|auto port token regNo password | CHAT text | SHARE 1|0 | LOGOUT      (tab separated)
+ *     stdout: STATE searching|connecting|loggedin|badlogin|rejected|offline|loggedout detail
+ *             MSG text | VIEWED 1|0 | SHARING 1|0|deny | LOG text
  */
 public class Agent {
     static final Path HOSTS = Path.of(System.getenv().getOrDefault("SystemRoot", "C:\\Windows"),
@@ -40,11 +44,18 @@ public class Agent {
     static Robot robot;
     static JWindow banner;
     static JLabel bannerLabel;
+    static volatile boolean app;           // --app: the student desktop app is our UI
+    static volatile boolean presenting;    // instructor approved this student's screen for the class
+    static volatile String loginReply;     // "ok" / "fail\t<why>" from the instructor, per connection
+    static volatile String[] settings;     // --app: {host, port, token, regNo, password}; null = logged out
+    static volatile Socket current;
+    static final Object wake = new Object();
 
     static JLabel status = new JLabel("Starting...");
     static JTextArea logArea = new JTextArea();
 
     static void log(String m) {
+        if (app) { emit("LOG", m); return; }
         System.out.println(m);
         SwingUtilities.invokeLater(() -> logArea.append(java.time.LocalTime.now().withNano(0) + "  " + m + "\n"));
     }
@@ -53,7 +64,16 @@ public class Agent {
         SwingUtilities.invokeLater(() -> { status.setText(s); status.setForeground(c); });
     }
 
+    /** One tab-separated line to the student app (--app only). */
+    static void emit(String... f) {
+        if (!app) return;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < f.length; i++) sb.append(i > 0 ? "\t" : "").append(f[i].replaceAll("[\\t\\r\\n]+", " "));
+        synchronized (System.out) { System.out.println(sb); System.out.flush(); }
+    }
+
     public static void main(String[] a) throws Exception {
+        if (a.length > 0 && a[0].equals("--app")) { runApp(); return; }
         String host = a.length > 0 ? a[0] : "auto";
         token = a.length > 1 ? a[1] : savedToken();
         if (token == null) token = askPassword("Class password (ask your instructor):");
@@ -96,29 +116,17 @@ public class Agent {
             setStatus("Connecting to " + who + "...", Color.GRAY);
             long connectedAt = System.currentTimeMillis();
             try (Socket s = new Socket(h, port)) {
-                s.setKeepAlive(true);
                 setStatus("Connected to " + who, new Color(0, 130, 0));
-                log("Connected to " + who + " as " + me);
-                PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"), true);
-                out.println(token + "\t" + me);
-                toTeacher = out;
                 new Thread(() -> { // still connected after 3 s: the password was accepted, remember it
                     try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
                     if (!s.isClosed()) saveToken(token);
                 }).start();
-                BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));
-                for (String line; (line = in.readLine()) != null; ) {
-                    if (!line.matches("(SCREEN|THUMB|MOUSE|KEY|VIEW|WB)\\b.*")) log("Teacher: " + line.replace("\t", " "));
-                    handle(line.split("\t", 2));
-                }
-                log("Teacher closed the connection");
+                session(s, who, me, null);
             } catch (IOException e) {
                 setStatus("Cannot reach teacher - retrying", Color.RED);
                 log("Cannot reach " + who + " - " + e.getMessage());
             }
-            toTeacher = null;
-            stopView(); // teacher gone: never leave the "being viewed" stream or banner running
-            SwingUtilities.invokeLater(() -> { hideView(); Board.apply("off"); });
+            ended();
             if (System.currentTimeMillis() - connectedAt < 3000) { // dropped straight away: almost always a wrong password
                 skip.put(h, System.currentTimeMillis() + 60_000);
                 setStatus("Rejected - wrong password?", Color.RED);
@@ -131,6 +139,121 @@ public class Agent {
                 }
             } else rejects = 0;
             Thread.sleep(3000);
+        }
+    }
+
+    /** Handshake (plus the student's login line in --app mode), then obey the teacher until the connection ends. */
+    static void session(Socket s, String who, String me, String login) throws IOException {
+        s.setKeepAlive(true);
+        current = s;
+        log("Connected to " + who + " as " + me);
+        PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"), true);
+        out.println(token + "\t" + me);
+        if (login != null) out.println(login);
+        toTeacher = out;
+        BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));
+        for (String line; (line = in.readLine()) != null; ) {
+            if (!line.matches("(SCREEN|THUMB|MOUSE|KEY|VIEW|WB|LOGIN)\\b.*")) log("Teacher: " + line.replace("\t", " "));
+            handle(line.split("\t", 2));
+        }
+        log("Teacher closed the connection");
+    }
+
+    /** Teacher gone: never leave the "being viewed" stream, banner, shared screen or presentation running. */
+    static void ended() {
+        toTeacher = null;
+        current = null;
+        if (presenting) { presenting = false; emit("SHARING", "0"); }
+        stopView();
+        SwingUtilities.invokeLater(() -> { hideView(); Board.apply("off"); });
+    }
+
+    // ---- --app mode: the student desktop app logs in and drives us over stdin ----
+
+    static void runApp() throws Exception {
+        app = true;
+        String me = System.getenv().getOrDefault("COMPUTERNAME", InetAddress.getLocalHost().getHostName());
+        Runtime.getRuntime().addShutdownHook(new Thread(Agent::releaseAll));
+        releaseAll();
+        Thread loop = new Thread(() -> appLoop(me), "connection");
+        loop.setDaemon(true);
+        loop.start();
+        BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+        for (String line; (line = in.readLine()) != null; ) {
+            String[] p = line.split("\t", -1);
+            String arg = p.length > 1 ? p[1] : "";
+            switch (p[0]) {
+                case "CONNECT" -> { if (p.length >= 6) restart(Arrays.copyOfRange(p, 1, 6)); }
+                case "LOGOUT" -> {
+                    PrintWriter out = toTeacher;
+                    if (out != null) out.println("LOGOUT");
+                    restart(null);
+                    emit("STATE", "loggedout", "");
+                }
+                case "CHAT" -> { PrintWriter out = toTeacher; if (out != null && !arg.isBlank()) out.println("CHAT\t" + arg); }
+                case "SHARE" -> {
+                    PrintWriter out = toTeacher;
+                    if (out != null) out.println("SHARE\t" + (arg.equals("1") ? "req" : "0"));
+                    if (!arg.equals("1") && presenting) { presenting = false; emit("SHARING", "0"); }
+                }
+                default -> log("Unknown app command " + p[0]);
+            }
+        }
+        System.exit(0); // the student app closed: the shutdown hook releases everything
+    }
+
+    /** New settings (or null = log out): drop the current connection and let the loop start over at once. */
+    static void restart(String[] st) {
+        synchronized (wake) { settings = st; wake.notifyAll(); }
+        Socket s = current;
+        if (s != null) try { s.close(); } catch (IOException ignored) { }
+    }
+
+    static void pause(long ms) {
+        synchronized (wake) { try { wake.wait(ms); } catch (InterruptedException ignored) { } }
+    }
+
+    static void appLoop(String me) {
+        while (true) {
+            String[] st = settings;
+            if (st == null) { pause(60_000); continue; }
+            String h = st[0].isBlank() ? "auto" : st[0].trim(), who = h;
+            int port;
+            try { port = Integer.parseInt(st[1].trim()); } catch (NumberFormatException e) { port = 5757; }
+            token = st[2];
+            if (h.equals("auto")) {
+                emit("STATE", "searching", "Looking for your instructor on this network...");
+                String[] found = discover(4000, new HashMap<>());
+                if (found == null) {
+                    if (st == settings) emit("STATE", "searching", "No instructor found on this network yet. If it stays like this, enter the instructor's IP in Settings.");
+                    continue;
+                }
+                h = found[0];
+                port = Integer.parseInt(found[1]);
+                who = found[2] + " (" + h + ")";
+            }
+            if (st != settings) continue;
+            emit("STATE", "connecting", "Connecting to " + who + "...");
+            loginReply = null;
+            boolean reached = false;
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress(h, port), 5000);
+                reached = true;
+                session(s, who, me, "LOGIN\t" + st[3] + "\t" + st[4]);
+            } catch (IOException e) {
+                if (!reached && st == settings) emit("STATE", "offline", "Cannot reach " + who + " (" + e.getMessage() + "). Retrying...");
+            }
+            ended();
+            if (st != settings) continue; // settings changed or logged out: start again right away
+            String r = loginReply;
+            if (reached && r == null) { // dropped without an answer: the class password was wrong
+                emit("STATE", "rejected", "The instructor rejected the class password. Check Settings.");
+                synchronized (wake) { if (settings == st) settings = null; }
+                continue;
+            }
+            if (r != null && r.startsWith("fail")) { synchronized (wake) { if (settings == st) settings = null; } continue; }
+            if (r != null) emit("STATE", "offline", "Lost the connection to " + who + ". Reconnecting...");
+            pause(3000);
         }
     }
 
@@ -199,7 +322,20 @@ public class Agent {
         String arg = p.length > 1 ? p[1] : "";
         try {
             switch (p[0]) {
-                case "MSG" -> new Thread(() -> JOptionPane.showMessageDialog(null, arg, "Teacher", JOptionPane.INFORMATION_MESSAGE)).start();
+                case "MSG" -> {
+                    if (app) emit("MSG", arg);
+                    else new Thread(() -> JOptionPane.showMessageDialog(null, arg, "Teacher", JOptionPane.INFORMATION_MESSAGE)).start();
+                }
+                case "LOGIN" -> {
+                    loginReply = arg;
+                    if (arg.equals("ok")) emit("STATE", "loggedin", "Connected to your instructor");
+                    else emit("STATE", "badlogin", arg.startsWith("fail\t") ? arg.substring(5) : "Login failed");
+                }
+                case "PRESENT" -> {
+                    presenting = arg.equals("1");
+                    emit("SHARING", arg.equals("deny") ? "deny" : presenting ? "1" : "0");
+                    if (presenting) startStreamer();
+                }
                 case "URL" -> { if (arg.matches("(?i)https?://.+")) Desktop.getDesktop().browse(URI.create(arg)); } // http(s) only: never run arbitrary schemes
                 case "LOCK" -> SwingUtilities.invokeLater(() -> lock(arg));
                 case "SCREEN" -> { var img = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(arg))); SwingUtilities.invokeLater(() -> show(img)); }
@@ -242,23 +378,37 @@ public class Agent {
     static synchronized void startView(int fps) {
         viewFps = Math.max(1, Math.min(fps, 15));
         if (!controlShown) setBanner("Your instructor is viewing this screen");
+        emit("VIEWED", "1");
+        startStreamer();
+    }
+
+    /** One capture thread for the remote view (FRAME, viewFps) and for presenting to the class (PFRAME, 2/s). */
+    static synchronized void startStreamer() {
         if (viewer != null) return;
         viewer = new Thread(() -> {
+            long lastPresent = 0;
             try {
-                while (viewFps > 0) {
+                while (viewFps > 0 || presenting) {
                     long t = System.currentTimeMillis();
                     PrintWriter out = toTeacher;
-                    if (out != null) out.println("FRAME\t" + capture(1280));
-                    Thread.sleep(Math.max(10, 1000 / Math.max(1, viewFps) - (System.currentTimeMillis() - t)));
+                    if (out != null && viewFps > 0) out.println("FRAME\t" + capture(1280));
+                    if (out != null && presenting && t - lastPresent >= 500) { out.println("PFRAME\t" + capture(1024)); lastPresent = t; }
+                    int fps = viewFps > 0 ? viewFps : 2;
+                    Thread.sleep(Math.max(10, 1000 / fps - (System.currentTimeMillis() - t)));
                 }
-            } catch (Exception e) { log("Remote view error: " + e); }
-            finally { synchronized (Agent.class) { viewer = null; } }
-        }, "remote-view");
+                synchronized (Agent.class) { viewer = null; if (viewFps > 0 || presenting) startStreamer(); } // asked again while we were stopping
+            } catch (Exception e) { // capture failed (macOS Screen Recording permission?): stop instead of retrying forever
+                log("Screen capture error: " + e);
+                synchronized (Agent.class) { viewer = null; viewFps = 0; }
+                if (presenting) { presenting = false; emit("SHARING", "0"); PrintWriter out = toTeacher; if (out != null) out.println("SHARE\t0"); }
+            }
+        }, "screen-stream");
         viewer.setDaemon(true);
         viewer.start();
     }
 
     static synchronized void stopView() {
+        if (viewFps > 0) emit("VIEWED", "0");
         viewFps = 0;
         controlShown = false;
         setBanner(null);
