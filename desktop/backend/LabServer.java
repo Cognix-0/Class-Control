@@ -9,19 +9,28 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 import javax.imageio.ImageIO;
+import java.nio.file.*;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 
 /**
  * Instructor-side TCP server. A student agent connects in and sends "token\tcomputerName", then receives
  * "COMMAND\targ" lines. Agents may reply "THUMB\t<b64 jpeg>" and "FRAME\t<b64 jpeg>".
+ * The student app's agent also sends "LOGIN\treg\tpw", "LOGOUT", "CHAT\ttext", "SHARE\treq|0" and,
+ * once the instructor approved it (PRESENT 1), "PFRAME\t<b64 jpeg>", which is shown to the whole class.
  *
  * One thread per agent reads; one writer thread per agent drains a bounded queue, so a slow student can
  * never block the instructor or the other students.
  *
  * Run as a process (the desktop app does this): java LabServer.java
- *   stdin  (tab separated): START token port [name] | SEND ids cmd arg | REMOTE id cmd arg | WB stroke | LIVE 1|0 | STOP
+ *   stdin  (tab separated): ROSTER file | START token port [name] | SEND ids cmd arg | REMOTE id cmd arg | WB stroke
+ *                           LIVE 1|0 | PRESENT id 1|0|deny | FORGET regNo | STOP
  *   stdout (tab separated): STARTED port | STARTFAIL msg | ADDED id host ip | REMOVED id
  *                           STATUS id status locked lastSeen | THUMB id b64 | FRAME id b64 | SHARE ids | LOG level msg
+ *                           STUDENT id regNo | CHAT id text | SHAREREQ id 1|0 | PRESENTER id
  */
 public final class LabServer implements AutoCloseable {
     static final int MAX_LINE = 8 * 1024 * 1024;   // trust boundary: a client can't make us buffer forever
@@ -37,6 +46,8 @@ public final class LabServer implements AutoCloseable {
             "VIEWOFF", Pattern.compile(""),
             "MOUSE", Pattern.compile("(move|down|up|wheel),(0(\\.\\d+)?|1(\\.0+)?),(0(\\.\\d+)?|1(\\.0+)?),-?\\d{1,3}"),
             "KEY", Pattern.compile("(down|up),\\d{1,5}"));
+    static final Pattern REG_NO = Pattern.compile("[A-Za-z0-9/._-]{1,32}");
+    static final int CHAT_MAX = 1000;
 
     static final class Client {
         final String id, host, ip;
@@ -45,6 +56,8 @@ public final class LabServer implements AutoCloseable {
         volatile long lastSeen = System.currentTimeMillis();
         volatile boolean locked;
         volatile String status = "online";
+        volatile String student = "";      // reg no of the student logged in on this PC
+        volatile boolean shareRequest;      // student asked to present their screen
 
         Client(String id, String host, String ip, Socket sock) { this.id = id; this.host = host; this.ip = ip; this.sock = sock; }
 
@@ -66,6 +79,8 @@ public final class LabServer implements AutoCloseable {
     // host -> LOCK / WEB state, re-applied when that PC reconnects (agent restarted, Wi-Fi dropped)
     private final Map<String, Map<String, String>> policy = new ConcurrentHashMap<>();
     private volatile boolean closed;
+    private volatile Roster roster = new Roster(null);
+    private volatile Client presenter;     // student whose screen the class sees (approved by the instructor)
 
     public LabServer(String token, int port, Consumer<String> sink) throws IOException {
         this.token = token;
@@ -121,6 +136,7 @@ public final class LabServer implements AutoCloseable {
             if (c != null) {
                 clients.remove(id);
                 if (sharing.remove(id)) emitShare();
+                if (presenter == c) stopPresenting();
                 emit("REMOVED", id);
                 log("info", c.host + " disconnected");
             }
@@ -166,6 +182,26 @@ public final class LabServer implements AutoCloseable {
         String kind = t < 0 ? line : line.substring(0, t);
         String data = t < 0 ? "" : line.substring(t + 1);
         if (kind.equals("FRAME")) { if (isBase64(data)) emit("FRAME", c.id, data); return; }
+        if (kind.equals("PFRAME")) { if (presenter == c && isBase64(data)) relay(c, data); return; } // never relay an unapproved screen
+        switch (kind) {
+            case "LOGIN" -> login(c, data);
+            case "LOGOUT" -> { if (!c.student.isEmpty()) { log("info", c.student + " logged out of " + c.host); c.student = ""; emit("STUDENT", c.id, ""); } }
+            case "CHAT" -> {
+                String text = clean(data).trim();
+                if (!text.isEmpty()) emit("CHAT", c.id, text.substring(0, Math.min(text.length(), CHAT_MAX)));
+            }
+            case "SHARE" -> {
+                if (data.equals("req") && presenter != c && !c.shareRequest) {
+                    c.shareRequest = true;
+                    emit("SHAREREQ", c.id, "1");
+                    log("info", who(c) + " asks to share their screen with the class");
+                } else if (data.equals("0")) {
+                    if (presenter == c) stopPresenting();
+                    else if (c.shareRequest) { c.shareRequest = false; emit("SHAREREQ", c.id, "0"); }
+                }
+            }
+            default -> { }
+        }
         c.lastSeen = System.currentTimeMillis();
         c.status = c.locked ? "locked" : "online";
         if (kind.equals("THUMB") && !data.isEmpty() && isBase64(data)) emit("THUMB", c.id, data);
@@ -196,6 +232,7 @@ public final class LabServer implements AutoCloseable {
         String a = (arg == null ? "" : arg).replaceAll("[\\r\\n]+", " ").trim();
         String n = to.size() + " PC" + (to.size() == 1 ? "" : "s");
         if (cmd.equals("SCREEN")) {
+            stopPresenting(); // one screen on the class at a time
             for (Client c : to) sharing.add(c.id);
             shareLoop();
             emitShare();
@@ -241,6 +278,137 @@ public final class LabServer implements AutoCloseable {
         if (ok == null || !ok.matcher(a).matches()) throw new IllegalArgumentException("Bad remote command " + cmd + " " + a);
         if (cmd.equals("VIEW") && c != null) log("info", "Remote view opened on " + c.host);
         return c != null && c.send(cmd + "\t" + a);
+    }
+
+    private String who(Client c) { return c.student.isEmpty() ? c.host : c.student + " (" + c.host + ")"; }
+
+    public void setRoster(Roster r) { roster = r; }
+
+    public boolean forget(String regNo) {
+        boolean had = roster.forget(regNo);
+        log("info", had ? "Password of " + regNo + " reset: their next login sets a new one" : regNo + " has no saved password");
+        return had;
+    }
+
+    private void login(Client c, String data) {
+        String[] p = data.split("\t", 2);
+        String reg = p[0].trim();
+        String why = !REG_NO.matcher(reg).matches() ? "Enter a valid registration number"
+                : p.length < 2 || p[1].isEmpty() ? "Enter your password" : roster.check(reg, p[1]);
+        if (why != null) {
+            c.send("LOGIN\tfail\t" + why);
+            log("warn", "Login failed for " + clean(reg) + " on " + c.host + ": " + why);
+            timer.schedule(() -> { try { c.sock.close(); } catch (IOException ignored) { } }, 500, TimeUnit.MILLISECONDS); // let the reply go out first
+            return;
+        }
+        for (Client o : clients.values()) if (o != c && o.student.equalsIgnoreCase(reg)) log("warn", reg + " is also logged in on " + o.host);
+        c.student = reg;
+        c.send("LOGIN\tok");
+        emit("STUDENT", c.id, reg);
+        log("info", reg + " is on " + c.host);
+    }
+
+    /** Instructor's answer to a share request (or starts/stops a presentation on its own). */
+    public synchronized boolean present(String id, String mode) {
+        Client c = clients.get(id);
+        switch (mode) {
+            case "1" -> {
+                if (c == null) return false;
+                if (!sharing.isEmpty()) send(List.of(), "SCREENOFF", "");
+                stopPresenting();
+                c.shareRequest = false;
+                emit("SHAREREQ", c.id, "0");
+                presenter = c;
+                c.send("PRESENT\t1");
+                emit("PRESENTER", c.id);
+                log("info", who(c) + " is presenting to the class");
+            }
+            case "deny" -> {
+                if (c == null) return false;
+                c.shareRequest = false;
+                emit("SHAREREQ", c.id, "0");
+                c.send("PRESENT\tdeny");
+            }
+            case "0" -> stopPresenting();
+            default -> throw new IllegalArgumentException("Bad present mode " + mode);
+        }
+        return true;
+    }
+
+    private synchronized void stopPresenting() {
+        Client p = presenter;
+        if (p == null) return;
+        presenter = null;
+        p.send("PRESENT\t0");
+        for (Client o : clients.values()) if (o != p) o.send("SCREENOFF\t");
+        emit("PRESENTER", "");
+        log("info", who(p) + " stopped presenting");
+    }
+
+    /** Presenter's frame to everyone else; slow links drop frames instead of queueing them (like shareLoop). */
+    private void relay(Client from, String frame) {
+        for (Client o : clients.values()) if (o != from && o.out.size() < 2) o.send("SCREEN\t" + frame);
+        emit("FRAME", from.id, frame);
+    }
+
+    /**
+     * Student passwords, checked by the instructor (never by the student's own PC). Trust on first use:
+     * a reg no's first login sets its password. Saved as salted PBKDF2 hashes; file == null keeps them in memory (demo).
+     */
+    static final class Roster {
+        private final Path file;
+        private final Properties hashes = new Properties();
+        private static final SecureRandom RANDOM = new SecureRandom();
+
+        Roster(Path file) {
+            this.file = file;
+            if (file != null && Files.exists(file)) {
+                try (InputStream in = Files.newInputStream(file)) { hashes.load(in); } catch (IOException ignored) { }
+            }
+        }
+
+        /** null = accepted (and registered if new), else the reason to show the student. */
+        synchronized String check(String reg, String pw) {
+            String key = reg.toUpperCase(Locale.ROOT);
+            String saved = hashes.getProperty(key);
+            if (saved == null) {
+                byte[] salt = new byte[16];
+                RANDOM.nextBytes(salt);
+                hashes.setProperty(key, b64(salt) + ":" + b64(hash(pw, salt)));
+                save();
+                return null;
+            }
+            String[] p = saved.split(":", 2);
+            byte[] want = Base64.getDecoder().decode(p[1]);
+            return MessageDigest.isEqual(want, hash(pw, Base64.getDecoder().decode(p[0]))) ? null : "Wrong registration number or password";
+        }
+
+        synchronized boolean forget(String reg) {
+            boolean had = hashes.remove(reg.toUpperCase(Locale.ROOT)) != null;
+            if (had) save();
+            return had;
+        }
+
+        private void save() {
+            if (file == null) return;
+            try {
+                Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+                try (OutputStream out = Files.newOutputStream(tmp)) { hashes.store(out, "Class Control student passwords (salt:PBKDF2)"); }
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException e) {
+                throw new UncheckedIOException("Could not save student passwords", e);
+            }
+        }
+
+        static byte[] hash(String pw, byte[] salt) {
+            try {
+                return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(new PBEKeySpec(pw.toCharArray(), salt, 60_000, 256)).getEncoded();
+            } catch (java.security.GeneralSecurityException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        private static String b64(byte[] b) { return Base64.getEncoder().encodeToString(b); }
     }
 
     /** Whiteboard stroke for every student. Validated, remembered for late joiners, then broadcast. */
@@ -384,13 +552,16 @@ public final class LabServer implements AutoCloseable {
         Consumer<String> sink = l -> { synchronized (out) { out.println(l); out.flush(); } };
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
         LabServer lab = null;
+        Roster roster = new Roster(null);
         for (String line; (line = in.readLine()) != null; ) {
             String[] p = line.split("\t", 4);
             try {
                 switch (p[0]) {
+                    case "ROSTER" -> roster = new Roster(Path.of(p[1]));
                     case "START" -> {
                         try {
                             lab = new LabServer(p[1], Integer.parseInt(p[2]), sink);
+                            lab.setRoster(roster);
                             lab.startBeacon(p.length > 3 && !p[3].isBlank() ? p[3] : "Class Control");
                             sink.accept("STARTED\t" + lab.port());
                         } catch (BindException e) {
@@ -403,6 +574,8 @@ public final class LabServer implements AutoCloseable {
                     case "REMOTE" -> lab.remote(p[1], p[2], p.length > 3 ? p[3] : "");
                     case "WB" -> lab.whiteboard(p[1]);
                     case "LIVE" -> lab.setLive(p[1].equals("1"), 2000);
+                    case "PRESENT" -> lab.present(p[1], p.length > 2 ? p[2] : "0");
+                    case "FORGET" -> lab.forget(p[1]);
                     case "STOP" -> { if (lab != null) { lab.endClass(); lab.close(); } return; }
                     default -> sink.accept("LOG\terror\tUnknown control line " + clean(p[0]));
                 }

@@ -141,6 +141,52 @@ public class LabServerTest {
             lab.send(List.of(), "MSG", "x");
             eq("MSG\tx", clean.next());
 
+            // ---- student login (trust on first use), chat, presenting to the class ----
+            events.clear();
+            Agent st = new Agent(port, "pw\tPC10");
+            String stId = event(events, "ADDED").split("\t")[1];
+            st.out.println("LOGIN\tIT23001\tsecret");
+            eq("LOGIN\tok", st.next());
+            eq("STUDENT\t" + stId + "\tIT23001", event(events, "STUDENT"));
+            st.out.println("CHAT\thelp\tplease");
+            eq("CHAT\t" + stId + "\thelp please", event(events, "CHAT"));
+            st.out.println("PFRAME\tUFJF");                                    // not approved: must not reach the class
+            st.out.println("SHARE\treq");
+            eq("SHAREREQ\t" + stId + "\t1", event(events, "SHAREREQ"));
+            lab.present(stId, "1");
+            eq("PRESENT\t1", st.next());
+            eq("PRESENTER\t" + stId, event(events, "PRESENTER"));
+            st.out.println("PFRAME\tQUJD");
+            eq("SCREEN\tQUJD", clean.next());                                  // the first frame the class gets is the approved one
+            st.out.println("SHARE\t0");                                        // student stops
+            eq("PRESENT\t0", st.next());
+            eq("SCREENOFF\t", clean.next());
+            st.out.println("SHARE\treq");
+            event(events, "SHAREREQ");
+            lab.present(stId, "deny");
+            eq("PRESENT\tdeny", st.next());
+            throwsIae(() -> lab.present(stId, "maybe"));
+
+            Agent wrong = new Agent(port, "pw\tPC11");
+            wrong.out.println("LOGIN\tit23001\tguess");                       // reg no is case-insensitive
+            eq("LOGIN\tfail\tWrong registration number or password", wrong.next());
+            eq(null, wrong.next());                                            // dropped after a failed login
+            Agent junk = new Agent(port, "pw\tPC12");
+            junk.out.println("LOGIN\tIT 23\tx");
+            eq("LOGIN\tfail\tEnter a valid registration number", junk.next());
+            eq(true, lab.forget("IT23001"));
+            Agent reset = new Agent(port, "pw\tPC13");
+            reset.out.println("LOGIN\tIT23001\tnewpass");                    // forgotten: the next login sets a new password
+            eq("LOGIN\tok", reset.next());
+            reset.s.close();
+            st.s.close();
+
+            java.nio.file.Path file = java.nio.file.Files.createTempFile("roster", ".properties");
+            new LabServer.Roster(file).check("IT1", "a");                      // saved to disk, read back by a new roster
+            eq(null, new LabServer.Roster(file).check("IT1", "a"));
+            eq("Wrong registration number or password", new LabServer.Roster(file).check("IT1", "b"));
+            java.nio.file.Files.delete(file);
+
             // ---- end of class releases everyone ----
             lab.endClass();
             eq("WB\toff", clean.next());
