@@ -28,11 +28,11 @@ const safe = (fn) => async (_e, ...args) => {
   try { return { ok: true, value: await fn(...args) }; } catch (err) { return { ok: false, error: err.message }; }
 };
 
-ipcMain.handle('lab:start', safe((token, port) => {
+ipcMain.handle('lab:start', safe((token, port, share) => {
   if (typeof token !== 'string' || !token.trim()) throw new Error('Enter a class password');
   const p = Number(port);
   if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('Port must be 1-65535');
-  return lab.start(token.trim(), p, os.hostname(), path.join(app.getPath('userData'), 'students.properties')).catch((e) => {
+  return lab.start(token.trim(), p, os.hostname(), path.join(app.getPath('userData'), 'students.properties'), !!share).catch((e) => {
     throw new Error(e.code === 'EADDRINUSE' ? `Port ${p} is already in use (is another console running?)` : e.message);
   });
 }));

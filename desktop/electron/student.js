@@ -103,7 +103,7 @@ ipcMain.handle('student:login', safe((regNo, password) => {
   if (!REG_NO.test(reg)) throw new Error('Enter your registration number (letters, digits, / . _ - only)');
   if (!password || /[\t\r\n]/.test(password)) throw new Error('Enter your password');
   const s = loadSettings();
-  if (!s.token) throw new Error("The class password isn't set yet. Open Settings (gear icon) and enter the details from your instructor.");
+  if (!s.token && s.host) throw new Error("Enter the class password in Settings (gear icon), or clear the IP so the app finds your instructor by itself.");
   saveSettings({ ...s, regNo: reg }); // remember the reg no, never the password
   login = { regNo: reg, password: String(password) };
   connect();

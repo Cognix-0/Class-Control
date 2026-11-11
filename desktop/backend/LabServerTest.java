@@ -89,7 +89,8 @@ public class LabServerTest {
             eq("REMOVED\t" + id, event(events, "REMOVED"));
 
             // ---- discovery beacon ----
-            eq("CCLASS1\t5757\tRoom 1", new String(LabServer.beaconPacket(5757, "Room\t1"), StandardCharsets.UTF_8)); // a tab in the name must not break the format
+            eq("CCLASS1\t5757\tRoom 1", new String(LabServer.beaconPacket(5757, "Room\t1", null), StandardCharsets.UTF_8)); // a tab in the name must not break the format
+            eq("CCLASS1\t5757\tRoom 1\tpw", new String(LabServer.beaconPacket(5757, "Room 1", "pw"), StandardCharsets.UTF_8)); // shared class password
 
             // ---- whiteboard: validated, relayed, replayed to late joiners ----
             Agent w1 = new Agent(port, "pw\tPC02");

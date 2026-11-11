@@ -23,7 +23,8 @@ public class AgentTest {
 
     public static void main(String[] args) throws Exception {
         // ---- beacon ----
-        eq("10.0.0.5:5757:Room 1", String.join(":", Agent.parseBeacon("CCLASS1\t5757\tRoom 1", "10.0.0.5")));
+        eq("10.0.0.5:5757:Room 1:", String.join(":", Agent.parseBeacon("CCLASS1\t5757\tRoom 1", "10.0.0.5")));
+        eq("10.0.0.5:5757:Room 1:pw\tx", String.join(":", Agent.parseBeacon("CCLASS1\t5757\tRoom 1\tpw\tx", "10.0.0.5"))); // shared password, kept whole
         eq(null, Agent.parseBeacon("HELLO\t5757\tx", "10.0.0.5"));
         eq(null, Agent.parseBeacon("CCLASS1\t0\tx", "10.0.0.5"));
         eq(null, Agent.parseBeacon("CCLASS1\t99999\tx", "10.0.0.5"));

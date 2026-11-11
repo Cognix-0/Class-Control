@@ -30,9 +30,9 @@ export default function Settings({ value, defaults, onSave, onClose }) {
           <input id="port" className="input mono" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
         </div>
         <div className="field">
-          <label htmlFor="token">Class password</label>
+          <label htmlFor="token">Class password <span className="muted">(only needed with an IP)</span></label>
           <div className="input-wrap">
-            <input id="token" className="input" type={show ? 'text' : 'password'} value={token} onChange={(e) => setToken(e.target.value)} autoFocus={!value.token} />
+            <input id="token" className="input" type={show ? 'text' : 'password'} value={token} onChange={(e) => setToken(e.target.value)} placeholder={host ? '' : 'Found automatically'} />
             <button type="button" className="btn ghost icon-btn" onClick={() => setShow(!show)} aria-label={show ? 'Hide password' : 'Show password'}>
               {show ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>

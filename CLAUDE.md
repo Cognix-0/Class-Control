@@ -46,7 +46,7 @@ Students (agent `--app`, sent after the handshake): `LOGIN\t<regNo>\t<password>`
 Agent `--app` stdio: stdin `CONNECT host|auto port token regNo password`, `CHAT text`, `SHARE 1|0`, `LOGOUT`; stdout `STATE searching|connecting|loggedin|badlogin|rejected|offline|loggedout detail`, `MSG text`, `VIEWED 1|0`, `SHARING 1|0|deny`, `LOG text`.
 LabServer extra stdin lines: `ROSTER file`, `PRESENT id 1|0|deny`, `FORGET regNo`; stdout `STUDENT id regNo`, `CHAT id text`, `SHAREREQ id 1|0`, `PRESENTER id`.
 
-Discovery: the server broadcasts `CCLASS1\t<tcpPort>\t<name>` over UDP to port 5758 every 2 s; agents listen, connect to the sender's address and send the password as usual.
+Discovery: the server broadcasts `CCLASS1\t<tcpPort>\t<name>[\t<token>]` over UDP to port 5758 every 2 s; agents listen, connect to the sender's address and send the password as usual. The token is included when the instructor leaves "Student apps on this network join on their own" ticked (start screen, default on): then students with an empty IP in Settings only type their reg no and password. The demo sends no beacon.
 Whiteboard: `WB\tbeg,<rrggbb>,<width>,<x>,<y>` / `add,<x>,<y>,...` / `end` / `clear` / `off`; all numbers are fractions (0..1) of a 16:9 board. The server validates each line, keeps the strokes and replays them to PCs that join later.
 State: the server remembers each PC's LOCK and web rules by host name and re-sends them when that PC reconnects; `endClass` (app closed) sends WB off, SCREENOFF, UNBLOCK and UNLOCK to everyone.
 
@@ -57,7 +57,7 @@ State: the server remembers each PC's LOCK and web rules by host name and re-sen
 - Lock: Ctrl+Alt+Del cannot be blocked by any program (policies hide Task Manager, Lock, Sign out, Shut down while locked). The keyboard hook runs in a hidden PowerShell helper; endpoint protection may flag it.
 - The Windows-only parts (Kiosk hook, firewall rules, proxy settings) have not been run on a real Windows PC yet; only their Java logic is tested.
 - The agent can be closed by a student; it needs a protected service for real lab use.
-- Token and student passwords are sent in plain text (no TLS).
+- Token and student passwords are sent in plain text (no TLS). With auto-join on, the class password is broadcast on the LAN, so anyone on that network can connect as a PC; student logins still need each student's own password.
 - Student passwords are trust-on-first-use: whoever first logs in with a reg no sets its password (no roster import yet).
 - Quitting the student app stops its agent (same as closing the agent); a student who logs out is no longer listed by name.
 - Screen share and remote view are JPEG snapshots, no audio.

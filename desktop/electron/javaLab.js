@@ -22,7 +22,7 @@ class JavaLab extends EventEmitter {
 
   /** `name` is announced to student PCs on the LAN so they can find this class on their own.
    *  `roster` = file with the students' password hashes (none = kept in memory, for the demo). */
-  start(token, port, name = '', roster = null) {
+  start(token, port, name = '', roster = null, share = false) {
     if (this.started) return this.started;
     if (/[\t\r\n]/.test(token)) return Promise.reject(new Error('The password cannot contain tabs or line breaks'));
     this.started = new Promise((resolve, reject) => {
@@ -48,7 +48,7 @@ class JavaLab extends EventEmitter {
       });
       this.stopping = false;
       if (roster) this.#write(`ROSTER\t${oneLine(roster)}`);
-      this.#write(`START\t${token}\t${port}\t${oneLine(name).replace(/\t/g, ' ')}`);
+      this.#write(`START\t${token}\t${port}\t${oneLine(name).replace(/\t/g, ' ')}\t${share ? 1 : 0}`);
     });
     this.started.catch(() => { this.started = null; });
     return this.started;

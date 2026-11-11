@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('lab', {
-  start: (token, port) => ipcRenderer.invoke('lab:start', token, port),
+  start: (token, port, share) => ipcRenderer.invoke('lab:start', token, port, share),
   demo: () => ipcRenderer.invoke('lab:demo'),
   info: () => ipcRenderer.invoke('lab:info'),
   list: () => ipcRenderer.invoke('lab:list'),

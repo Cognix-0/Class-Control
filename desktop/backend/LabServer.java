@@ -26,7 +26,7 @@ import java.security.SecureRandom;
  * never block the instructor or the other students.
  *
  * Run as a process (the desktop app does this): java LabServer.java
- *   stdin  (tab separated): ROSTER file | START token port [name] | SEND ids cmd arg | REMOTE id cmd arg | WB stroke
+ *   stdin  (tab separated): ROSTER file | START token port [name [share]] (name = announce on the LAN, share 1 = beacon carries the token) | SEND ids cmd arg | REMOTE id cmd arg | WB stroke
  *                           LIVE 1|0 | PRESENT id 1|0|deny | FORGET regNo | STOP
  *   stdout (tab separated): STARTED port | STARTFAIL msg | ADDED id host ip | REMOVED id
  *                           STATUS id status locked lastSeen | THUMB id b64 | FRAME id b64 | SHARE ids | LOG level msg
@@ -426,10 +426,11 @@ public final class LabServer implements AutoCloseable {
     }
 
     /** Announces this instructor on the LAN every 2 s so student agents can find it without typing an IP. */
-    public void startBeacon(String name) throws SocketException {
+    /** shareToken: the beacon also carries the class password, so student apps on this network join without typing it. */
+    public void startBeacon(String name, boolean shareToken) throws SocketException {
         beaconSocket = new DatagramSocket();
         beaconSocket.setBroadcast(true);
-        byte[] pkt = beaconPacket(port(), name);
+        byte[] pkt = beaconPacket(port(), name, shareToken ? token : null);
         beacon = timer.scheduleAtFixedRate(() -> {
             for (InetAddress to : broadcastAddresses()) {
                 try { beaconSocket.send(new DatagramPacket(pkt, pkt.length, to, DISCOVERY_PORT)); } catch (IOException ignored) { }
@@ -438,8 +439,8 @@ public final class LabServer implements AutoCloseable {
         log("info", "Student PCs on this network will find the class automatically");
     }
 
-    static byte[] beaconPacket(int tcpPort, String name) {
-        return ("CCLASS1\t" + tcpPort + "\t" + clean(name)).getBytes(StandardCharsets.UTF_8);
+    static byte[] beaconPacket(int tcpPort, String name, String token) {
+        return ("CCLASS1\t" + tcpPort + "\t" + clean(name) + (token == null ? "" : "\t" + clean(token))).getBytes(StandardCharsets.UTF_8);
     }
 
     static List<InetAddress> broadcastAddresses() {
@@ -554,7 +555,7 @@ public final class LabServer implements AutoCloseable {
         LabServer lab = null;
         Roster roster = new Roster(null);
         for (String line; (line = in.readLine()) != null; ) {
-            String[] p = line.split("\t", 4);
+            String[] p = line.split("\t", 5);
             try {
                 switch (p[0]) {
                     case "ROSTER" -> roster = new Roster(Path.of(p[1]));
@@ -562,7 +563,7 @@ public final class LabServer implements AutoCloseable {
                         try {
                             lab = new LabServer(p[1], Integer.parseInt(p[2]), sink);
                             lab.setRoster(roster);
-                            lab.startBeacon(p.length > 3 && !p[3].isBlank() ? p[3] : "Class Control");
+                            if (p.length > 3 && !p[3].isBlank()) lab.startBeacon(p[3], p.length > 4 && p[4].equals("1")); // no name (demo): stay off the LAN
                             sink.accept("STARTED\t" + lab.port());
                         } catch (BindException e) {
                             sink.accept("STARTFAIL\tPort " + p[2] + " is already in use (is another console running?)");

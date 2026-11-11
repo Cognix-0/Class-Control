@@ -76,8 +76,8 @@ public class Agent {
         if (a.length > 0 && a[0].equals("--app")) { runApp(); return; }
         String host = a.length > 0 ? a[0] : "auto";
         token = a.length > 1 ? a[1] : savedToken();
-        if (token == null) token = askPassword("Class password (ask your instructor):");
-        if (token == null || token.isEmpty()) return;
+        if (token == null && !host.equals("auto")) token = askPassword("Class password (ask your instructor):"); // auto: the instructor may share it
+        if (token != null && token.isEmpty()) return;
         int fixedPort = a.length > 2 ? Integer.parseInt(a[2]) : 5757;
         String me = System.getenv().getOrDefault("COMPUTERNAME", "student");
         Runtime.getRuntime().addShutdownHook(new Thread(Agent::releaseAll));
@@ -93,7 +93,7 @@ public class Agent {
             f.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); // students can't just close it
             f.addWindowListener(new WindowAdapter() {
                 @Override public void windowClosing(WindowEvent e) {
-                    if (token.equals(askPassword("Enter the class password to close the agent:"))) System.exit(0);
+                    if (token == null || token.equals(askPassword("Enter the class password to close the agent:"))) System.exit(0);
                 }
             });
             f.setVisible(true);
@@ -112,6 +112,8 @@ public class Agent {
                 h = found[0];
                 port = Integer.parseInt(found[1]);
                 who = found[2] + " (" + h + ")";
+                if (!found[3].isEmpty()) token = found[3]; // the instructor shares the class password on this network
+                else if (token == null && (token = askPassword("Class password (ask your instructor):")) == null) return;
             }
             setStatus("Connecting to " + who + "...", Color.GRAY);
             long connectedAt = System.currentTimeMillis();
@@ -231,8 +233,14 @@ public class Agent {
                 h = found[0];
                 port = Integer.parseInt(found[1]);
                 who = found[2] + " (" + h + ")";
+                if (!found[3].isEmpty()) token = found[3]; // shared by the instructor: students never type it
             }
             if (st != settings) continue;
+            if (token.isEmpty()) {
+                emit("STATE", "rejected", "Your instructor didn't share the class password on this network. Enter it in Settings.");
+                synchronized (wake) { if (settings == st) settings = null; }
+                continue;
+            }
             emit("STATE", "connecting", "Connecting to " + who + "...");
             loginReply = null;
             boolean reached = false;
@@ -281,13 +289,13 @@ public class Agent {
         return null;
     }
 
-    /** "CCLASS1\t<tcpPort>\t<name>" -> {from, port, name}; anything else (other broadcasts, junk) -> null. */
+    /** "CCLASS1\t<tcpPort>\t<name>[\t<token>]" -> {from, port, name, token or ""}; anything else (other broadcasts, junk) -> null. */
     static String[] parseBeacon(String msg, String from) {
-        String[] p = msg.split("\t", 3);
+        String[] p = msg.split("\t", 4);
         if (p.length < 3 || !p[0].equals("CCLASS1")) return null;
         try {
             int port = Integer.parseInt(p[1].trim());
-            return port < 1 || port > 65535 ? null : new String[]{from, "" + port, p[2].trim()};
+            return port < 1 || port > 65535 ? null : new String[]{from, "" + port, p[2].trim(), p.length > 3 ? p[3] : ""};
         } catch (NumberFormatException e) {
             return null;
         }
