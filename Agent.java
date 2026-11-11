@@ -190,6 +190,8 @@ public class Agent {
                     PrintWriter out = toTeacher;
                     if (out != null) out.println("LOGOUT");
                     restart(null);
+                    SwingUtilities.invokeLater(Agent::unlock); // logged out: never leave the PC locked or filtered
+                    clearWeb();
                     emit("STATE", "loggedout", "");
                 }
                 case "CHAT" -> { PrintWriter out = toTeacher; if (out != null && !arg.isBlank()) out.println("CHAT\t" + arg); }
