@@ -51,7 +51,7 @@ public class Agent {
     static volatile Socket current;
     static final Object wake = new Object();
 
-    static JLabel status = new JLabel("Starting...");
+    static JLabel status = new JLabel("Starting..."), info = new JLabel();
     static JTextArea logArea = new JTextArea();
 
     static void log(String m) {
@@ -87,7 +87,10 @@ public class Agent {
             status.setFont(status.getFont().deriveFont(Font.BOLD, 16f));
             status.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
             logArea.setEditable(false);
-            f.add(status, BorderLayout.NORTH);
+            JPanel top = new JPanel(new GridLayout(0, 1));
+            top.add(status);
+            top.add(info);
+            f.add(top, BorderLayout.NORTH);
             f.add(new JScrollPane(logArea), BorderLayout.CENTER);
             f.setSize(420, 300);
             f.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); // students can't just close it
@@ -149,6 +152,11 @@ public class Agent {
         s.setKeepAlive(true);
         current = s;
         log("Connected to " + who + " as " + me);
+        if (!app) {
+            String connection = "  Teacher: " + s.getInetAddress().getHostAddress() + ":" + s.getPort()
+                    + "   (this PC: " + me + ", " + s.getLocalAddress().getHostAddress() + ")";
+            SwingUtilities.invokeLater(() -> info.setText(connection));
+        }
         PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"), true);
         out.println(token + "\t" + me);
         if (login != null) out.println(login);
