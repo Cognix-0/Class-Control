@@ -490,6 +490,9 @@ public class Agent {
             f.setUndecorated(true);
             f.setAlwaysOnTop(true);
             f.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+            f.addWindowListener(new WindowAdapter() {
+                @Override public void windowIconified(WindowEvent e) { f.setExtendedState(Frame.NORMAL); }
+            });
             f.getContentPane().setBackground(Color.BLACK);
             JLabel l = new JLabel(msg, SwingConstants.CENTER);
             l.setForeground(Color.WHITE);
@@ -499,7 +502,11 @@ public class Agent {
             locks.add(f);
         }
         lockTimer = new javax.swing.Timer(200, e -> {
-            for (JFrame f : locks) { f.toFront(); f.requestFocus(); }
+            for (JFrame f : locks) {
+                if ((f.getExtendedState() & Frame.ICONIFIED) != 0) f.setExtendedState(Frame.NORMAL); // minimized by a gesture
+                f.toFront();
+                f.requestFocus();
+            }
             Board.toFront(); // a whiteboard shown to a locked class stays above the lock
         });
         lockTimer.start();
@@ -832,7 +839,7 @@ public class Agent {
     /**
      * Stops a locked student leaving the lock screen: a hidden PowerShell helper runs a low-level keyboard hook that
      * swallows the Windows key (Start, Win+Tab, Win+Ctrl+arrows = switching desktops), Alt+Tab, Alt+Esc, Alt+F4,
-     * Ctrl+Esc and Ctrl+Shift+Esc; policies hide Task Manager, Lock, Sign out and Shut down. Ctrl+Alt+Del itself
+     * Ctrl+Esc and Ctrl+Shift+Esc (also when injected, which is how touchpad gestures arrive); policies hide Task Manager, Lock, Sign out and Shut down. Ctrl+Alt+Del itself
      * cannot be blocked by any program. The helper only blocks keys, it never records them.
      */
     static final class Kiosk {
@@ -863,7 +870,6 @@ public class Agent {
                         if (code >= 0) {
                             int vk = Marshal.ReadInt32(l);                    // KBDLLHOOKSTRUCT.vkCode
                             int flags = Marshal.ReadInt32(l, 8);              // KBDLLHOOKSTRUCT.flags
-                            bool injected = (flags & 0x10) != 0;              // sent by software, e.g. the instructor's remote control
                             bool alt = (flags & 0x20) != 0;
                             bool ctrl = (GetAsyncKeyState(0x11) & 0x8000) != 0;
                             bool shift = (GetAsyncKeyState(0x10) & 0x8000) != 0;
@@ -871,7 +877,7 @@ public class Agent {
                                 || (alt && (vk == 0x09 || vk == 0x1B || vk == 0x73))               // Alt+Tab, Alt+Esc, Alt+F4
                                 || (ctrl && vk == 0x1B)                                            // Ctrl+Esc, Ctrl+Shift+Esc
                                 || (ctrl && shift && vk == 0x1B);
-                            if (block && !injected) return (IntPtr)1;
+                            if (block) return (IntPtr)1;                     // injected keys too: touchpad gestures send them
                         }
                         return CallNextHookEx(hook, code, w, l);
                     }
