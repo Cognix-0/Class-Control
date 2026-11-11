@@ -31,6 +31,14 @@ public class AgentTest {
         eq(null, Agent.parseBeacon("CCLASS1\tabc\tx", "10.0.0.5"));
         eq(null, Agent.parseBeacon("CCLASS1", "10.0.0.5"));
 
+        // ---- touchpad settings saved before a lock ----
+        String q = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad\r\n    ThreeFingerSlideEnabled    REG_DWORD    0x1\r\n\r\n";
+        eq("1", Agent.Kiosk.regDword(q, "ThreeFingerSlideEnabled"));
+        eq("1", Agent.Kiosk.regDword(q, "threefingerslideenabled"));
+        eq(null, Agent.Kiosk.regDword(q, "FourFingerSlideEnabled"));
+        eq(null, Agent.Kiosk.regDword("ERROR: The system was unable to find the specified registry key or value.", "ThreeFingerSlideEnabled"));
+        eq("255", Agent.Kiosk.regDword("    X    REG_DWORD    0xff", "X"));
+
         // ---- filter rules ----
         try (Agent.WebFilter block = new Agent.WebFilter(false, List.of("facebook.com"), 0);
              Agent.WebFilter only = new Agent.WebFilter(true, List.of("school.edu"), 0)) {

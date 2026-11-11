@@ -842,7 +842,8 @@ public class Agent {
      * Stops a locked student leaving the lock screen: a hidden PowerShell helper runs a low-level keyboard hook that
      * swallows the Windows key (Start, Win+Tab, Win+Ctrl+arrows = switching desktops), Alt+Tab, Alt+Esc, Alt+F4,
      * Ctrl+Esc and Ctrl+Shift+Esc (also when injected, which is how touchpad gestures arrive); policies hide Task Manager, Lock, Sign out and Shut down. Ctrl+Alt+Del itself
-     * cannot be blocked by any program. The helper only blocks keys, it never records them.
+     * cannot be blocked by any program. Touchpad gestures and touchscreen edge swipes are turned off too (the student's own
+     * touchpad settings are saved and put back). The helper only blocks keys, it never records them.
      */
     static final class Kiosk {
         static final boolean WIN = System.getProperty("os.name").startsWith("Windows");
@@ -850,7 +851,47 @@ public class Agent {
         static final String EXP = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
         static final String[][] POLICIES = {{SYS, "DisableTaskMgr"}, {SYS, "DisableLockWorkstation"}, {SYS, "DisableChangePassword"},
                 {EXP, "NoLogoff"}, {EXP, "NoClose"}};
+        // shortcut: Windows may only pick up touchpad changes once its touchpad settings reload; the keyboard hook is the main block
+        static final String PAD = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad";
+        static final String[] PAD_VALUES = {"ThreeFingerSlideEnabled", "FourFingerSlideEnabled", "ThreeFingerTapEnabled", "FourFingerTapEnabled"};
+        static final String EDGE = "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\EdgeUI"; // touchscreen edge swipes
+        static final Path PAD_SAVED = Path.of(System.getProperty("user.home"), ".classcontrol-touchpad.properties"); // the student's own settings
         static Process hook;
+
+        /** The DWORD value named in "reg query" output, as a decimal string, or null if it isn't there. */
+        static String regDword(String out, String name) {
+            for (String line : out.split("\\R")) {
+                String[] f = line.trim().split("\\s+");
+                if (f.length == 3 && f[0].equalsIgnoreCase(name) && f[1].equals("REG_DWORD") && f[2].startsWith("0x")) {
+                    try { return String.valueOf(Long.parseLong(f[2].substring(2), 16)); } catch (NumberFormatException e) { return null; }
+                }
+            }
+            return null;
+        }
+
+        /** Turns touchpad gestures off, first saving the student's values (once, so a second lock never saves our zeros). */
+        static void padOff() {
+            if (!Files.exists(PAD_SAVED)) {
+                Properties old = new Properties();
+                for (String v : PAD_VALUES) { String d = regDword(runOut("reg", "query", PAD, "/v", v), v); if (d != null) old.setProperty(v, d); }
+                try (OutputStream o = Files.newOutputStream(PAD_SAVED)) { old.store(o, "Class Control: touchpad settings to restore after a lock"); }
+                catch (IOException e) { log("Touchpad gestures left on: " + e.getMessage()); return; }
+            }
+            for (String v : PAD_VALUES) run("reg", "add", PAD, "/v", v, "/t", "REG_DWORD", "/d", "0", "/f");
+        }
+
+        /** Puts back exactly what padOff saved (values that didn't exist are removed again). */
+        static void padRestore() {
+            if (!Files.exists(PAD_SAVED)) return;
+            Properties old = new Properties();
+            try (InputStream i = Files.newInputStream(PAD_SAVED)) { old.load(i); } catch (IOException e) { log("Touchpad settings not restored: " + e.getMessage()); return; }
+            for (String v : PAD_VALUES) {
+                String d = old.getProperty(v);
+                if (d != null) run("reg", "add", PAD, "/v", v, "/t", "REG_DWORD", "/d", d, "/f");
+                else run("reg", "delete", PAD, "/v", v, "/f");
+            }
+            try { Files.delete(PAD_SAVED); } catch (IOException ignored) { }
+        }
 
         static final String HOOK_PS1 = """
                 param([int]$ParentPid)
@@ -901,6 +942,8 @@ public class Agent {
         static synchronized void on() {
             if (!WIN) return;
             for (String[] p : POLICIES) run("reg", "add", p[0], "/v", p[1], "/t", "REG_DWORD", "/d", "1", "/f");
+            run("reg", "add", EDGE, "/v", "AllowEdgeSwipe", "/t", "REG_DWORD", "/d", "0", "/f");
+            padOff();
             if (hook != null && hook.isAlive()) return;
             try {
                 Path script = Files.createTempFile("cc-kiosk", ".ps1");
@@ -918,6 +961,8 @@ public class Agent {
             if (hook != null) { hook.destroyForcibly(); hook = null; }
             if (!WIN) return;
             for (String[] p : POLICIES) run("reg", "delete", p[0], "/v", p[1], "/f");
+            run("reg", "delete", EDGE, "/v", "AllowEdgeSwipe", "/f");
+            padRestore();
         }
     }
 
