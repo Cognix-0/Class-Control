@@ -9,4 +9,9 @@ Run the appropriate setup to install and launch automatically. Java is included.
 
 The installers were built from commit `584d6b0`. Mac installers are not included in this release. See [INSTALL.md](INSTALL.md) for setup, rebuild instructions, and platform limitations.
 
-Installer binaries are stored as release assets because each exceeds GitHub's 100 MB regular Git file limit. Source files are tracked in this repository; generated dependencies and build output remain ignored.
+The setup files are also tracked on `main` using Git LFS:
+
+- [Instructor setup in main](installers/windows/Class-Control-Instructor-Setup.exe)
+- [Student setup in main](installers/windows/Class-Control-Student-Setup.exe)
+
+Use **Download raw file** on the file's GitHub page to download the actual installer. When cloning, install Git LFS and run `git lfs pull` to retrieve the binaries. Each installer exceeds GitHub's 100 MB regular Git file limit, so Git LFS stores its binary contents separately. Generated dependencies and other build output remain ignored.

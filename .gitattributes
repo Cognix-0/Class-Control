@@ -1,0 +1,1 @@
+installers/windows/*.exe filter=lfs diff=lfs merge=lfs -text
