@@ -39,12 +39,15 @@ export default function App() {
   const [boardOpen, setBoardOpen] = useState(false); // the instructor's whiteboard editor is on screen
   const [chats, setChats] = useState([]); // { id, pcId, who, from: 'student'|'me', text, at }
   const [unread, setUnread] = useState(0);
+  const [heads, setHeads] = useState({}); // threadKey -> { unread, at }: chat heads shown over the desks
   const [presenter, setPresenter] = useState(null);
   const saveTimer = useRef(null);
   const pcsRef = useRef(pcs);
   pcsRef.current = pcs;
   const panelRef = useRef(panel);
   panelRef.current = panel;
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   const toast = useCallback((msg, level = 'ok') => {
     const id = ++seq;
@@ -66,7 +69,9 @@ export default function App() {
       const pc = pcsRef.current[e.id];
       const name = pc ? who(pc) : e.id;
       setChats((c) => [...c.slice(-500), { id: ++seq, key: pc ? threadKey(pc) : e.id, who: name, from: 'student', text: e.text, at: e.at }]);
-      if (panelRef.current !== 'messages') { setUnread((u) => u + 1); toast(`${name}: ${e.text}`, 'msg'); }
+      if (pc) setHeads((h) => ({ ...h, [threadKey(pc)]: { unread: (h[threadKey(pc)]?.unread ?? 0) + 1, at: e.at } }));
+      if (panelRef.current !== 'messages') setUnread((u) => u + 1);
+      if (viewRef.current !== '3d' || !pc) toast(`${name}: ${e.text}`, 'msg'); // the 3D view shows a chat head on the desk instead
     } else if (e.type === 'sharereq') {
       const pc = pcsRef.current[e.id];
       if (panelRef.current !== 'messages') setUnread((u) => u + 1);
@@ -142,6 +147,12 @@ export default function App() {
     const r = await call(window.lab.send([pcId], 'MSG', text));
     if (r.ok) setChats((c) => [...c, { id: ++seq, key: threadKey(pcs[pcId]), who: who(pcs[pcId]), from: 'me', text, at: Date.now() }]);
   };
+  // read = opened (keep the head, clear its count); otherwise the chat is done and the head goes away
+  const onHead = (pc, read) => setHeads((h) => {
+    const k = threadKey(pc), n = { ...h };
+    if (read) { if (n[k]) n[k] = { ...n[k], unread: 0 }; } else delete n[k];
+    return n;
+  });
   const openPanel = (p) => { setPanel(p); if (p === 'messages') setUnread(0); };
   const cardAction = async (id, cmd) => {
     if (cmd === 'MSG') { selectOnly([id]); setDockRequest({ cmd, n: ++seq }); }
@@ -187,7 +198,8 @@ export default function App() {
       <div className="stage-area">
         <div className="map">
           {view === '3d'
-            ? <Lab3D {...common} seatOfPc={seatOf} flyTo={flyTo} sharing={sharing.size > 0} onRemote={setRemoteId} onAction={cardAction} onCloseInfo={() => setFocusId(null)} />
+            ? <Lab3D {...common} seatOfPc={seatOf} flyTo={flyTo} sharing={sharing.size > 0} onRemote={setRemoteId} onAction={cardAction} onCloseInfo={() => setFocusId(null)}
+                heads={heads} chats={chats} onReply={reply} onHead={onHead} />
             : <LabFlat {...common} onBox={(ids, add) => setSelected((s) => new Set(add ? [...s, ...ids] : ids))} onMove={moveSeat} />}
           <SearchBox pcs={pcList} where={where} onPick={pick} />
           {view === '2d' && focusPc && (
