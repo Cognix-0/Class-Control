@@ -1,0 +1,24 @@
+/* Student app: narrow window, same tokens and components as the instructor app (styles.css). */
+.student { height: 100%; }
+.student .start-card { width: min(400px, calc(100vw - 32px)); padding: 32px 28px; position: relative; }
+.student-card .gear { position: absolute; top: 14px; right: 14px; }
+.connecting { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line-soft); }
+.student .modal { width: min(420px, calc(100vw - 32px)); }
+.student .toasts { top: 14px; right: 14px; width: min(340px, calc(100vw - 28px)); }
+
+.home { height: 100%; display: flex; flex-direction: column; gap: 12px; padding: 16px; background: radial-gradient(ellipse at 50% 0%, rgba(79, 179, 191, .10), transparent 60%), var(--bg); }
+.home-head { display: flex; align-items: center; gap: 10px; }
+.avatar { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(79, 179, 191, .16); border: 1px solid rgba(79, 179, 191, .4); color: var(--accent-hi); font-weight: 700; font-family: var(--mono); }
+.home-head .who { font-weight: 700; font-family: var(--mono); letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; }
+.conn { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--bg-2); }
+.conn.wait { color: #ffd88a; border-color: rgba(240, 180, 41, .35); }
+.notice { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 9px 12px; border-radius: 10px; color: #ffaaa8; border: 1px solid rgba(239, 83, 80, .4); background: rgba(239, 83, 80, .08); }
+.card { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 16px; }
+.card p { margin: 6px 0 12px; font-size: 13px; }
+.btn.big { width: 100%; height: 44px; justify-content: center; }
+.share-live { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--accent-hi); }
+.share-wait { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 12px; }
+.chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat-title { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.chat-list { flex: 1; min-height: 80px; overflow: auto; padding-right: 2px; }
+.bubble .from { font-size: 11px; color: var(--accent-hi); margin-bottom: 2px; }

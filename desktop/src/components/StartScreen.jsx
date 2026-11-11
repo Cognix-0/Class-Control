@@ -8,6 +8,7 @@ export default function StartScreen({ onStarted }) {
   const [password, setPassword] = useState(() => read('cc.password', ''));
   const [port, setPort] = useState(() => read('cc.port', '5757'));
   const [show, setShow] = useState(false);
+  const [share, setShare] = useState(() => read('cc.share', '1') === '1');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -15,11 +16,12 @@ export default function StartScreen({ onStarted }) {
     e.preventDefault();
     setBusy(true);
     setError('');
-    const r = await window.lab.start(password, Number(port));
+    const r = await window.lab.start(password, Number(port), share);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     write('cc.password', password);
     write('cc.port', String(port));
+    write('cc.share', share ? '1' : '0');
     onStarted({ port: r.value, password });
   }
 
@@ -50,6 +52,10 @@ export default function StartScreen({ onStarted }) {
           <label htmlFor="port">Port</label>
           <input id="port" className="input mono" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
         </div>
+        <label className="check">
+          <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />
+          <span>Student apps on this network join on their own<br /><small className="muted">They find this PC and the class password automatically; students only enter their reg no.</small></span>
+        </label>
         {error && <div className="error" role="alert">{error}</div>}
         <button className="btn primary" style={{ width: '100%', height: 44, justifyContent: 'center' }} disabled={busy || !password.trim()}>
           <Play size={16} /> {busy ? 'Starting…' : 'Start class'}
@@ -57,7 +63,7 @@ export default function StartScreen({ onStarted }) {
         <button type="button" className="btn ghost" style={{ width: '100%', height: 40, justifyContent: 'center', marginTop: 10 }} disabled={busy} onClick={demo}>
           <FlaskConical size={16} /> Try demo with 18 simulated PCs
         </button>
-        <div className="hint">Student PCs run the Class Control agent and connect to this computer.</div>
+        <div className="hint">Student PCs on the same network find this class automatically. They only need the agent and the password above.</div>
       </form>
     </div>
   );

@@ -4,6 +4,8 @@ import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { ROW_D } from '../seating.js';
 import InfoCard from './InfoCard.jsx';
+import ChatHead from './ChatHead.jsx';
+import { threadKey } from '../names.js';
 
 const C = {
   floor: '#101418', empty: '#7d868e', desk: '#d3dade', locked: '#f0b429', stuck: '#ef5350',
@@ -138,7 +140,7 @@ function CameraRig({ goal }) {
   return null;
 }
 
-export default function Lab3D({ layout, seats, bySeat, seatOfPc, selected, focusId, flyTo, sharing, onSeatClick, onSeatDouble, onBlockClick, onEmpty, onRemote, onAction, onCloseInfo }) {
+export default function Lab3D({ layout, seats, bySeat, seatOfPc, selected, focusId, flyTo, sharing, onSeatClick, onSeatDouble, onBlockClick, onEmpty, onRemote, onAction, onCloseInfo, heads = {}, chats = [], onReply, onHead }) {
   const wrap = useRef(null);
   const ring = useRef(null);
   const tag = useRef(null);
@@ -193,7 +195,18 @@ export default function Lab3D({ layout, seats, bySeat, seatOfPc, selected, focus
           const pc = bySeat.get(s.key);
           if (!pc) return null;
           const cls = pc.id === focusId ? 'focus' : selected.has(pc.id) ? 'sel' : '';
-          return <div key={s.key} className="pin" ref={pin(`l${s.key}`, [s.x, 1.42, s.z - 0.22], cls ? 'always' : 'auto')}><div className={`desk-label ${cls}`}>{pc.host}</div></div>;
+          return <div key={s.key} className="pin" ref={pin(`l${s.key}`, [s.x, 1.42, s.z - 0.22], cls ? 'always' : 'auto')}><div className={`desk-label ${cls} ${pc.presenting ? 'presenting' : ''}`} title={pc.host}>{pc.shareRequest ? '✋ ' : ''}{pc.student || pc.host}</div></div>;
+        })}
+        {seats.map((s) => {
+          const pc = bySeat.get(s.key);
+          const head = pc && heads[threadKey(pc)];
+          if (!head) return null;
+          const key = threadKey(pc);
+          return (
+            <div key={`h${s.key}`} className="pin chat" ref={pin(`h${s.key}`, [s.x, 1.75, s.z - 0.22], 'always')}>
+              <ChatHead pc={pc} head={head} messages={chats.filter((c) => c.key === key).slice(-6)} onReply={onReply} onDismiss={onHead} />
+            </div>
+          );
         })}
         {layout.blocks.map((b, bi) => (
           <div key={`b${bi}`} className="pin" ref={pin(`b${bi}`, [b.x, 0.1, b.z - ROW_D * 0.8])}>

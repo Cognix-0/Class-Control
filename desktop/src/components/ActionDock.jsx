@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Ban, CheckSquare, Link2, Lock, MessageSquare, MonitorUp, MonitorX, MousePointer2, ShieldCheck, Unlock, XSquare } from 'lucide-react';
+import { Ban, CheckSquare, Link2, ListChecks, Lock, MessageSquare, MonitorUp, MonitorX, MousePointer2, ShieldCheck, Unlock, XSquare } from 'lucide-react';
 import ConfirmModal from './ConfirmModal.jsx';
 
 // Commands that take text, with presets and input validation.
@@ -7,9 +7,10 @@ const INPUTS = {
   MSG: { title: 'Send a message', placeholder: 'Type a message for the students', chips: ['Please save your work', '5 minutes left', 'Eyes on the projector', 'Class is over — log off'], ok: (v) => v.trim().length > 0 },
   URL: { title: 'Open a link on their screens', placeholder: 'https://…', chips: ['https://classroom.google.com', 'https://www.w3schools.com'], ok: (v) => /^https?:\/\/\S+$/i.test(v.trim()), bad: 'Links must start with http:// or https://' },
   BLOCK: { title: 'Block websites', placeholder: 'youtube.com, facebook.com', chips: ['youtube.com', 'facebook.com', 'tiktok.com', 'instagram.com'], ok: (v) => /^[a-z0-9.-]+(\s*,\s*[a-z0-9.-]+)*$/i.test(v.trim()), bad: 'Use domain names separated by commas', append: true },
+  ALLOW: { title: 'Only allow these websites', placeholder: 'school.edu, wikipedia.org', chips: ['wikipedia.org', 'classroom.google.com', 'khanacademy.org', 'w3schools.com'], ok: (v) => /^[a-z0-9.-]+(\s*,\s*[a-z0-9.-]+)*$/i.test(v.trim()), bad: 'Use domain names separated by commas', append: true },
 };
-const DANGER = new Set(['LOCK', 'BLOCK']);
-const VERB = { LOCK: 'Lock screens', BLOCK: 'Block websites' };
+const DANGER = new Set(['LOCK', 'BLOCK', 'ALLOW']);
+const VERB = { LOCK: 'Lock screens', BLOCK: 'Block websites', ALLOW: 'Allow only these sites' };
 
 export default function ActionDock({ count, total, sharingAll, onSend, onRemote, onSelectAll, onClear, request }) {
   const [pop, setPop] = useState(null); // command whose input popover is open
@@ -54,6 +55,7 @@ export default function ActionDock({ count, total, sharingAll, onSend, onRemote,
         : <A cmd="SCREEN" icon={MonitorUp} label="Share screen" />}
       <div className="sep" />
       <A cmd="BLOCK" icon={Ban} label="Block sites" danger />
+      <A cmd="ALLOW" icon={ListChecks} label="Only allow" danger />
       <A cmd="UNBLOCK" icon={ShieldCheck} label="Unblock" />
       <div className="sep" />
       <A icon={MousePointer2} label="Control" disabled={count !== 1} onClick={onRemote} />
@@ -76,7 +78,7 @@ export default function ActionDock({ count, total, sharingAll, onSend, onRemote,
       )}
       {confirm && (
         <ConfirmModal title={`${VERB[confirm.cmd]} on ${count} PCs?`}
-          body={confirm.cmd === 'LOCK' ? 'Students will see a full-screen lock until you unlock them.' : `Students won't be able to open: ${confirm.arg}`}
+          body={confirm.cmd === 'LOCK' ? 'Students will see a full-screen lock until you unlock them.' : confirm.cmd === 'ALLOW' ? `Students will only be able to open: ${confirm.arg}` : `Students won't be able to open: ${confirm.arg}`}
           confirm={VERB[confirm.cmd]} onNo={() => setConfirm(null)} onYes={() => { onSend(confirm.cmd, confirm.arg); setConfirm(null); }} />
       )}
     </div>

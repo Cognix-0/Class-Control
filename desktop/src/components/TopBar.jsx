@@ -1,6 +1,6 @@
-import { Box, LayoutGrid, LocateFixed, Radio } from 'lucide-react';
+import { Box, LayoutGrid, LocateFixed, PenLine, Radio } from 'lucide-react';
 
-export default function TopBar({ online, total, live, onLive, view, onView, onRecenter, panel, onPanel, address, sharing }) {
+export default function TopBar({ online, total, live, onLive, view, onView, onRecenter, panel, onPanel, address, sharing, unread, boardLive, onBoard }) {
   const tab = (id, label) => (
     <button className={panel === id ? 'active' : ''} onClick={() => onPanel(panel === id ? null : id)}>{label}</button>
   );
@@ -9,11 +9,15 @@ export default function TopBar({ online, total, live, onLive, view, onView, onRe
       <div className="brand">Class<span>Control</span></div>
       <nav className="nav">
         <button className={panel === null ? 'active' : ''} onClick={() => onPanel(null)}>Lab</button>
+        <button className={panel === 'messages' ? 'active' : ''} onClick={() => onPanel(panel === 'messages' ? null : 'messages')}>
+          Messages{unread > 0 && <span className="count" aria-label={`${unread} new`}>{unread}</span>}
+        </button>
         {tab('layout', 'Layout')}
         {tab('activity', 'Activity')}
       </nav>
       <div className="spacer" />
       {sharing > 0 && <span className="live-badge"><Radio size={12} /> SHARING TO {sharing}</span>}
+      <button className={`btn sm ${boardLive ? 'on' : ''}`} onClick={onBoard} title="Write on a whiteboard that students see live"><PenLine size={15} /> Whiteboard</button>
       <span className="pill mono" title="Students connect to this address">{address}</span>
       <span className="pill"><span className={`dot ${online ? 'online' : ''}`} />{online} of {total} online</span>
       <button className={`switch ${live ? 'on' : ''}`} onClick={() => onLive(!live)} role="switch" aria-checked={live}>
