@@ -2,8 +2,8 @@
 
 Requires Windows 10/11, 64-bit. Java and Electron are included; Node.js and Java do not need to be installed on destination PCs.
 
-1. Copy `desktop/release/Class Control-Setup-1.0.0-x64.exe` to the instructor PC and run it.
-2. Copy `desktop/release-student/Class Control Student-Setup-1.0.0-x64.exe` to each student PC and run it. Starting the student app requests administrator access for computer management features.
+1. Copy `desktop/release/Class Control-Setup-1.0.0-x64.exe` to the instructor PC and run it. Setup automatically installs to the default location, creates shortcuts, and launches the app.
+2. Copy `desktop/release-student/Class Control Student-Setup-1.0.0-x64.exe` to each student PC and run it. Setup automatically installs and launches the student app. Starting the student app requests administrator access for computer management features.
 3. Connect the PCs to the same local network. Start a class in the instructor app, then open the student apps and sign in. Settings allows an explicit instructor IP and class password if automatic discovery is unavailable.
 4. Allow the applications on the private network when Windows Firewall prompts. The network must permit TCP 5757 and UDP 5758 between lab PCs.
 

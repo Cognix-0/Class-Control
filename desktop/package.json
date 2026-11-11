@@ -49,10 +49,11 @@
       }
     ],
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
+      "runAfterFinish": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
     }
   },
