@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('lab', {
   remote: (id, cmd, arg) => ipcRenderer.invoke('lab:remote', id, cmd, arg),
   whiteboard: (arg) => ipcRenderer.invoke('lab:wb', arg),
   setLive: (on) => ipcRenderer.invoke('lab:live', on),
+  present: (id, mode) => ipcRenderer.invoke('lab:present', id, mode),
+  forget: (reg) => ipcRenderer.invoke('lab:forget', reg),
   getLayout: () => ipcRenderer.invoke('layout:get'),
   saveLayout: (l) => ipcRenderer.invoke('layout:save', l),
   onEvent: (cb) => {

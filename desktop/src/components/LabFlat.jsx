@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Lock, Monitor } from 'lucide-react';
+import { Hand, Lock, Monitor } from 'lucide-react';
 
 // Top-down grid: easiest for picking many PCs (drag a box) and moving PCs between seats.
 export default function LabFlat({ layout, seats, bySeat, selected, focusId, onSeatClick, onSeatDouble, onBlockClick, onBox, onEmpty, onMove }) {
@@ -53,14 +53,16 @@ export default function LabFlat({ layout, seats, bySeat, selected, focusId, onSe
                 }
                 const cls = ['seat', pc.status, selected.has(pc.id) && 'sel', focusId === pc.id && 'focus', dropKey === s.key && 'drop'].filter(Boolean).join(' ');
                 return (
-                  <div key={s.key} className={cls} data-pcid={pc.id} draggable title={`${pc.host} · ${pc.ip} — drag to move seat`}
+                  <div key={s.key} className={cls} data-pcid={pc.id} draggable title={`${pc.student ? pc.student + ' on ' : ''}${pc.host} · ${pc.ip} — drag to move seat`}
                     onClick={(e) => onSeatClick(pc.id, e)} onDoubleClick={() => onSeatDouble(pc.id)}
                     onDragStart={(e) => e.dataTransfer.setData('text/host', pc.host)}
                     onDragOver={(e) => { e.preventDefault(); setDropKey(s.key); }} onDragLeave={() => setDropKey(null)}
                     onDrop={(e) => { e.preventDefault(); setDropKey(null); onMove(e.dataTransfer.getData('text/host'), s.key); }}>
                     <div className="scr">{pc.thumb ? <img alt="" src={`data:image/jpeg;base64,${pc.thumb}`} /> : <Monitor size={20} />}</div>
-                    <div className="nm"><span className={`dot ${pc.status}`} /><span>{pc.host}</span></div>
+                    <div className="nm"><span className={`dot ${pc.status}`} /><span>{pc.student || pc.host}</span></div>
+                    {pc.student && <div className="sub">{pc.host}</div>}
                     {pc.locked && <Lock size={13} className="badge" />}
+                    {pc.shareRequest && <Hand size={13} className="badge hand" aria-label="Wants to share their screen" />}
                   </div>
                 );
               })}

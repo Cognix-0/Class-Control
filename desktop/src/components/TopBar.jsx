@@ -1,6 +1,6 @@
 import { Box, LayoutGrid, LocateFixed, PenLine, Radio } from 'lucide-react';
 
-export default function TopBar({ online, total, live, onLive, view, onView, onRecenter, panel, onPanel, address, sharing, boardLive, onBoard }) {
+export default function TopBar({ online, total, live, onLive, view, onView, onRecenter, panel, onPanel, address, sharing, unread, boardLive, onBoard }) {
   const tab = (id, label) => (
     <button className={panel === id ? 'active' : ''} onClick={() => onPanel(panel === id ? null : id)}>{label}</button>
   );
@@ -9,6 +9,9 @@ export default function TopBar({ online, total, live, onLive, view, onView, onRe
       <div className="brand">Class<span>Control</span></div>
       <nav className="nav">
         <button className={panel === null ? 'active' : ''} onClick={() => onPanel(null)}>Lab</button>
+        <button className={panel === 'messages' ? 'active' : ''} onClick={() => onPanel(panel === 'messages' ? null : 'messages')}>
+          Messages{unread > 0 && <span className="count" aria-label={`${unread} new`}>{unread}</span>}
+        </button>
         {tab('layout', 'Layout')}
         {tab('activity', 'Activity')}
       </nav>

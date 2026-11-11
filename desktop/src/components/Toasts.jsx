@@ -1,6 +1,6 @@
-import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, MessageSquare, XCircle } from 'lucide-react';
 
-const ICON = { ok: CheckCircle2, warn: AlertTriangle, error: XCircle };
+const ICON = { ok: CheckCircle2, warn: AlertTriangle, error: XCircle, msg: MessageSquare };
 
 export default function Toasts({ items }) {
   return (

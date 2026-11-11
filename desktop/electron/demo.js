@@ -24,12 +24,22 @@ function fakeScreen(w, h, hue, t, cursor) {
   return nativeImage.createFromBitmap(buf, { width: w, height: h }).toJPEG(70).toString('base64');
 }
 
-function fakeAgent(port, token, name, hue) {
+// A few demo students do something on their own so the Messages panel and share requests can be tried.
+const SCRIPT = {
+  2: [[4000, 'CHAT\tSir, the lab sheet link does not open for me']],
+  6: [[7000, 'SHARE\treq']],
+  10: [[12000, 'CHAT\tCan you check my code? Question 3 gives an error']],
+};
+
+function fakeAgent(port, token, name, hue, i) {
   const s = net.connect(port, '127.0.0.1');
   s.setEncoding('utf8');
   s.write(`${token}\t${name}\n`);
+  if (i % 9 !== 8) s.write(`LOGIN\tIT23${String(101 + i).padStart(4, '0')}\tdemo\n`); // two PCs stay without a student
+  const timers = (SCRIPT[i] ?? []).map(([ms, line]) => setTimeout(() => s.write(line + '\n'), ms));
   let buf = '';
   let viewTimer = null;
+  let presentTimer = null;
   let cursor = null;
   const t0 = Date.now();
   const t = () => (Date.now() - t0) / 1000;
@@ -45,15 +55,20 @@ function fakeAgent(port, token, name, hue) {
         viewTimer = setInterval(() => s.write(`FRAME\t${fakeScreen(960, 600, hue, t(), cursor)}\n`), 1000 / Math.max(1, Number(arg) || 5));
       } else if (cmd === 'VIEWOFF') { clearInterval(viewTimer); viewTimer = null; }
       else if (cmd === 'MOUSE') { const p = arg.split(','); cursor = [Number(p[1]), Number(p[2])]; }
+      else if (cmd === 'MSG') timers.push(setTimeout(() => s.write('CHAT\tOK, thank you!\n'), 1500));
+      else if (cmd === 'PRESENT') {
+        clearInterval(presentTimer);
+        presentTimer = arg === '1' ? setInterval(() => s.write(`PFRAME\t${fakeScreen(800, 500, hue, t(), null)}\n`), 500) : null;
+      }
     }
   });
   s.on('error', () => {});
-  s.on('close', () => clearInterval(viewTimer));
+  s.on('close', () => { clearInterval(viewTimer); clearInterval(presentTimer); timers.forEach(clearTimeout); });
   return s;
 }
 
 function startDemo(port, token, count = 18) {
-  return Array.from({ length: count }, (_, i) => fakeAgent(port, token, `LAB-PC${String(i + 1).padStart(2, '0')}`, i * 0.7));
+  return Array.from({ length: count }, (_, i) => fakeAgent(port, token, `LAB-PC${String(i + 1).padStart(2, '0')}`, i * 0.7, i));
 }
 
 module.exports = { startDemo };

@@ -12,6 +12,9 @@ import ActivityLog from './components/ActivityLog.jsx';
 import Whiteboard from './components/Whiteboard.jsx';
 import LayoutEditor from './components/LayoutEditor.jsx';
 import Toasts from './components/Toasts.jsx';
+import Inbox from './components/Inbox.jsx';
+import PresenterPip from './components/PresenterPip.jsx';
+import { threadKey, who } from './names.js';
 import { allSeats, assignSeats } from './seating.js';
 
 let seq = 0;
@@ -34,7 +37,14 @@ export default function App() {
   const [dockRequest, setDockRequest] = useState(null);
   const [boardLive, setBoardLive] = useState(false); // students are seeing the whiteboard
   const [boardOpen, setBoardOpen] = useState(false); // the instructor's whiteboard editor is on screen
+  const [chats, setChats] = useState([]); // { id, pcId, who, from: 'student'|'me', text, at }
+  const [unread, setUnread] = useState(0);
+  const [presenter, setPresenter] = useState(null);
   const saveTimer = useRef(null);
+  const pcsRef = useRef(pcs);
+  pcsRef.current = pcs;
+  const panelRef = useRef(panel);
+  panelRef.current = panel;
 
   const toast = useCallback((msg, level = 'ok') => {
     const id = ++seq;
@@ -51,6 +61,17 @@ export default function App() {
       setSelected((s) => { if (!s.has(e.id)) return s; const n = new Set(s); n.delete(e.id); return n; });
       setRemoteId((r) => (r === e.id ? null : r));
     } else if (e.type === 'share') setSharing(new Set(e.ids));
+    else if (e.type === 'presenter') setPresenter(e.id);
+    else if (e.type === 'chat') {
+      const pc = pcsRef.current[e.id];
+      const name = pc ? who(pc) : e.id;
+      setChats((c) => [...c.slice(-500), { id: ++seq, key: pc ? threadKey(pc) : e.id, who: name, from: 'student', text: e.text, at: e.at }]);
+      if (panelRef.current !== 'messages') { setUnread((u) => u + 1); toast(`${name}: ${e.text}`, 'msg'); }
+    } else if (e.type === 'sharereq') {
+      const pc = pcsRef.current[e.id];
+      if (panelRef.current !== 'messages') setUnread((u) => u + 1);
+      toast(`${pc ? who(pc) : 'A student'} asks to share their screen. Open Messages to allow it.`, 'warn');
+    }
     else if (e.type === 'log') {
       setLogs((l) => [...l.slice(-400), { ...e, id: ++seq }]);
       if (e.level !== 'info') toast(e.msg, e.level);
@@ -61,7 +82,7 @@ export default function App() {
     setSession(s);
     const [l, i, list] = await Promise.all([call(window.lab.getLayout()), call(window.lab.info()), call(window.lab.list())]);
     if (l.ok) setLayout(l.value);
-    if (i.ok) setInfo(i.value);
+    if (i.ok) { setInfo(i.value); setPresenter(i.value.presenter); }
     if (list.ok) setPcs(Object.fromEntries(list.value.map((p) => [p.id, p])));
   }
 
@@ -113,8 +134,22 @@ export default function App() {
     const done = { MSG: `Message sent to ${n}`, URL: `Link opened on ${n}`, LOCK: `Locked ${n}`, UNLOCK: `Unlocked ${n}`, SCREEN: `Sharing your screen with ${n}`, SCREENOFF: `Stopped sharing on ${n}`, BLOCK: `Blocked sites on ${n}`, ALLOW: `${n} can now only open the sites you listed`, UNBLOCK: `Unblocked sites on ${n}` };
     if (r.ok) toast(done[cmd]);
   };
-  const cardAction = (id, cmd) => {
-    if (cmd === 'MSG') { selectOnly([id]); setDockRequest({ cmd, n: ++seq }); } else send(cmd, '', [id]);
+  const present = async (id, mode) => {
+    const r = await call(window.lab.present(id, mode));
+    if (r.ok && mode === '1') toast(`${who(pcs[id])} is now on every screen`);
+  };
+  const reply = async (pcId, text) => {
+    const r = await call(window.lab.send([pcId], 'MSG', text));
+    if (r.ok) setChats((c) => [...c, { id: ++seq, key: threadKey(pcs[pcId]), who: who(pcs[pcId]), from: 'me', text, at: Date.now() }]);
+  };
+  const openPanel = (p) => { setPanel(p); if (p === 'messages') setUnread(0); };
+  const cardAction = async (id, cmd) => {
+    if (cmd === 'MSG') { selectOnly([id]); setDockRequest({ cmd, n: ++seq }); }
+    else if (cmd === 'PRESENT') present(id, '1');
+    else if (cmd === 'STOPPRESENT') present(id, '0');
+    else if (cmd === 'DENY') present(id, 'deny');
+    else if (cmd === 'FORGET') { const reg = pcs[id]?.student; const r = reg && await call(window.lab.forget(reg)); if (r?.ok) toast(`${reg}'s password is reset. Their next login sets a new one.`); }
+    else send(cmd, '', [id]);
   };
   const toggleLive = async (on) => { const r = await call(window.lab.setLive(on)); if (r.ok) setLive(on); };
 
@@ -140,13 +175,14 @@ export default function App() {
   const sharingAll = sel.length > 0 && sel.every((id) => sharing.has(id));
   const focusPc = focusId && pcs[focusId];
   const remotePc = remoteId && pcs[remoteId];
+  const presenterPc = presenter && pcs[presenter];
 
   const common = { layout, seats, bySeat, selected, focusId, onSeatClick, onSeatDouble: setRemoteId, onBlockClick, onEmpty: clear };
 
   return (
     <div className="app">
       <TopBar online={online} total={pcList.length} live={live} onLive={toggleLive} view={view} onView={setView} onRecenter={() => pick(null)}
-        panel={panel} onPanel={setPanel} address={address} sharing={sharing.size}
+        panel={panel} onPanel={openPanel} address={address} sharing={sharing.size} unread={unread}
         boardLive={boardLive} onBoard={() => { setBoardLive(true); setBoardOpen(true); }} />
       <div className="stage-area">
         <div className="map">
@@ -172,10 +208,12 @@ export default function App() {
               </button>
             </div>
           )}
+          {presenterPc && <PresenterPip pc={presenterPc} onStop={() => present('', '0')} />}
           {overflow.length > 0 && <div className="waiting" style={{ bottom: 112 }}><b>{overflow.length} PC{overflow.length === 1 ? '' : 's'}</b>&nbsp;have no seat. Add rows or blocks in Layout.</div>}
           <ActionDock count={selected.size} total={pcList.length} sharingAll={sharingAll} onSend={send} request={dockRequest}
             onRemote={() => setRemoteId(sel[0])} onSelectAll={() => selectOnly(pcList.map((p) => p.id))} onClear={clear} />
         </div>
+        {panel === 'messages' && <Inbox chats={chats} pcs={pcList} onReply={reply} onPresent={present} onLocate={(id) => { setView('3d'); pick(id); }} onClose={() => setPanel(null)} />}
         {panel === 'activity' && <ActivityLog logs={logs} onClear={() => setLogs([])} onClose={() => setPanel(null)} />}
         {panel === 'layout' && <LayoutEditor layout={layout} onChange={changeLayout} onClose={() => setPanel(null)} seatCount={seats.length} pcCount={pcList.length} />}
       </div>

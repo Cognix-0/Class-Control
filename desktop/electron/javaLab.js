@@ -20,8 +20,9 @@ class JavaLab extends EventEmitter {
     this.started = null;
   }
 
-  /** `name` is announced to student PCs on the LAN so they can find this class on their own. */
-  start(token, port, name = '') {
+  /** `name` is announced to student PCs on the LAN so they can find this class on their own.
+   *  `roster` = file with the students' password hashes (none = kept in memory, for the demo). */
+  start(token, port, name = '', roster = null) {
     if (this.started) return this.started;
     if (/[\t\r\n]/.test(token)) return Promise.reject(new Error('The password cannot contain tabs or line breaks'));
     this.started = new Promise((resolve, reject) => {
@@ -46,6 +47,7 @@ class JavaLab extends EventEmitter {
         else this.#onEvent(p);
       });
       this.stopping = false;
+      if (roster) this.#write(`ROSTER\t${oneLine(roster)}`);
       this.#write(`START\t${token}\t${port}\t${oneLine(name).replace(/\t/g, ' ')}`);
     });
     this.started.catch(() => { this.started = null; });
@@ -86,6 +88,21 @@ class JavaLab extends EventEmitter {
     return true;
   }
 
+  /** Let a student show their screen to the class: mode '1' allow, 'deny', '0' stop (id may be empty). */
+  present(id, mode) {
+    if (!['1', '0', 'deny'].includes(mode)) throw new Error(`Bad present mode ${mode}`);
+    this.#write(`PRESENT\t${oneLine(id)}\t${mode}`);
+    return true;
+  }
+
+  /** Forget a student's password; their next login sets a new one. */
+  forget(regNo) {
+    this.#write(`FORGET\t${oneLine(regNo).replace(/\t/g, ' ')}`);
+    return true;
+  }
+
+  presenterId() { return this.presenter ?? null; }
+
   setLive(on) { this.#write(`LIVE\t${on ? 1 : 0}`); }
 
   #write(line) {
@@ -93,6 +110,7 @@ class JavaLab extends EventEmitter {
   }
 
   #clear() {
+    this.presenter = null;
     for (const id of [...this.pcs.keys()]) this.emit('event', { type: 'removed', id });
     this.pcs.clear();
     this.sharing.clear();
@@ -102,7 +120,7 @@ class JavaLab extends EventEmitter {
     const pc = this.pcs.get(p[1]);
     switch (p[0]) {
       case 'ADDED': {
-        const added = { id: p[1], host: p[2], ip: p[3], status: 'online', lastSeen: Date.now(), thumb: null, locked: false };
+        const added = { id: p[1], host: p[2], ip: p[3], status: 'online', lastSeen: Date.now(), thumb: null, locked: false, student: '', shareRequest: false, presenting: false };
         this.pcs.set(added.id, added);
         this.emit('event', { type: 'added', pc: added });
         break;
@@ -121,6 +139,24 @@ class JavaLab extends EventEmitter {
           this.emit('event', { type: 'updated', pc: next });
         }
         break;
+      case 'STUDENT':
+        this.#patch(pc, { student: p[2] ?? '' });
+        break;
+      case 'SHAREREQ':
+        this.#patch(pc, { shareRequest: p[2] === '1' });
+        if (pc && p[2] === '1') this.emit('event', { type: 'sharereq', id: pc.id });
+        break;
+      case 'CHAT':
+        if (pc) this.emit('event', { type: 'chat', id: pc.id, text: p[2] ?? '', at: Date.now() });
+        break;
+      case 'PRESENTER': {
+        const was = this.presenter;
+        this.presenter = p[1] || null;
+        if (was) this.#patch(this.pcs.get(was), { presenting: false });
+        if (this.presenter) this.#patch(this.pcs.get(this.presenter), { presenting: true });
+        this.emit('event', { type: 'presenter', id: this.presenter });
+        break;
+      }
       case 'FRAME':
         this.emit('event', { type: 'frame', id: p[1], data: p[2] });
         break;
@@ -132,6 +168,13 @@ class JavaLab extends EventEmitter {
         this.#log(p[2], p[1]);
         break;
     }
+  }
+
+  #patch(pc, change) {
+    if (!pc) return;
+    const next = { ...this.pcs.get(pc.id), ...change };
+    this.pcs.set(next.id, next);
+    this.emit('event', { type: 'updated', pc: next });
   }
 
   #log(msg, level = 'info') {

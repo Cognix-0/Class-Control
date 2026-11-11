@@ -96,3 +96,52 @@ test('closing the app releases the students', { timeout: 60_000 }, async () => {
   assert.equal(await a.next(), 'UNLOCK\t');
   a.destroy();
 });
+
+test('students: login, chat, share request, presenting', { timeout: 60_000 }, async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const roster = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-')), 'students.properties');
+  const lab = new JavaLab();
+  const port = await lab.start('pw', 0, 'Room 1', roster);
+  try {
+    const added = nextEvent(lab, 'added');
+    const s = agent(port, 'pw\tPC05');
+    const { pc } = await added;
+    const viewer = agent(port, 'pw\tPC06');
+    await nextEvent(lab, 'added');
+
+    const student = nextEvent(lab, 'updated');
+    s.write('LOGIN\tIT23001\tsecret\n');
+    assert.equal(await s.next(), 'LOGIN\tok');
+    assert.equal((await student).pc.student, 'IT23001');
+    assert.match(fs.readFileSync(roster, 'utf8'), /^IT23001=/m); // saved for the next class
+
+    const chat = nextEvent(lab, 'chat');
+    s.write('CHAT\thelp me\n');
+    assert.equal((await chat).text, 'help me');
+
+    const req = nextEvent(lab, 'sharereq');
+    s.write('SHARE\treq\n');
+    assert.equal((await req).id, pc.id);
+    assert.equal(lab.list().find((p) => p.id === pc.id).shareRequest, true);
+
+    const presenter = nextEvent(lab, 'presenter');
+    lab.present(pc.id, '1');
+    assert.equal(await s.next(), 'PRESENT\t1');
+    assert.equal((await presenter).id, pc.id);
+    assert.equal(lab.list().find((p) => p.id === pc.id).presenting, true);
+    s.write('PFRAME\tQUJD\n');
+    assert.equal(await viewer.next(), 'SCREEN\tQUJD');
+    const stopped = nextEvent(lab, 'presenter');
+    lab.present('', '0');
+    assert.equal(await s.next(), 'PRESENT\t0');
+    assert.equal(await viewer.next(), 'SCREENOFF\t');
+    assert.equal((await stopped).id, null);
+    assert.throws(() => lab.present(pc.id, 'yes'));
+    s.destroy();
+    viewer.destroy();
+  } finally {
+    lab.stop();
+  }
+});
