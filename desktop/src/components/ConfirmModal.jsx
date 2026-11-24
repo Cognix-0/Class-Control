@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-export default function ConfirmModal({ title, body, confirm, onYes, onNo }) {
+export default function ConfirmModal({ title, body, confirm, cancel = 'Cancel', onYes, onNo }) {
   const yes = useRef(null);
   useEffect(() => {
     yes.current?.focus();
@@ -14,7 +14,7 @@ export default function ConfirmModal({ title, body, confirm, onYes, onNo }) {
         <h3 id="cm-title">{title}</h3>
         <p>{body}</p>
         <div className="row">
-          <button className="btn" onClick={onNo}>Cancel</button>
+          <button className="btn" onClick={onNo}>{cancel}</button>
           <button ref={yes} className="btn primary" onClick={onYes}>{confirm}</button>
         </div>
       </div>

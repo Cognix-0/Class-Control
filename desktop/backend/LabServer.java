@@ -28,9 +28,16 @@ import java.security.SecureRandom;
  * Run as a process (the desktop app does this): java LabServer.java
  *   stdin  (tab separated): ROSTER file | START token port [name [share]] (name = announce on the LAN, share 1 = beacon carries the token) | SEND ids cmd arg | REMOTE id cmd arg | WB stroke
  *                           LIVE 1|0 | PRESENT id 1|0|deny | FORGET regNo | STOP
+ *                           COACCEPT id 1|0 (host only: answer a co-instructor's join request)
  *   stdout (tab separated): STARTED port | STARTFAIL msg | ADDED id host ip | REMOVED id
  *                           STATUS id status locked lastSeen | THUMB id b64 | FRAME id b64 | SHARE ids | LOG level msg
- *                           STUDENT id regNo | CHAT id text | SHAREREQ id 1|0 | PRESENTER id
+ *                           STUDENT id regNo | CHAT id text | SHAREREQ id 1|0 | PRESENTER id | LIVESTATE 1|0
+ *                           COJOIN id name ip | COGONE id (host only)
+ *
+ * Co-instructors: a second instructor app connects to the same TCP port and sends "#INSTRUCTOR\tname". Once the
+ * host approves it (COACCEPT), it gets "JOINED", a snapshot of the class as events, then every live event; it may
+ * send the same control lines as the host except FORGET / COACCEPT / START / STOP. One class server, many
+ * instructors: students keep a single connection, so two instructors never fight over a PC.
  */
 public final class LabServer implements AutoCloseable {
     static final int MAX_LINE = 8 * 1024 * 1024;   // trust boundary: a client can't make us buffer forever
@@ -64,6 +71,16 @@ public final class LabServer implements AutoCloseable {
         boolean send(String line) { return out.offer(line); }
     }
 
+    /** A second instructor app sharing this class (see the class comment). */
+    static final class Instructor {
+        final String id, name, ip;
+        final Socket sock;
+        final BlockingQueue<String> out = new LinkedBlockingQueue<>(4096);
+        volatile boolean approved;
+
+        Instructor(String id, String name, String ip, Socket sock) { this.id = id; this.name = name; this.ip = ip; this.sock = sock; }
+    }
+
     private final String token;
     private final ServerSocket server;
     private final Consumer<String> sink;
@@ -81,6 +98,10 @@ public final class LabServer implements AutoCloseable {
     private volatile boolean closed;
     private volatile Roster roster = new Roster(null);
     private volatile Client presenter;     // student whose screen the class sees (approved by the instructor)
+    private final Map<String, Instructor> instructors = new ConcurrentHashMap<>();
+    private final Object fanout = new Object();                   // events reach the host and every co-instructor in one order
+    private final ThreadLocal<String> actor = new ThreadLocal<>(); // co-instructor whose command is running, for the activity log
+    private volatile boolean liveOn;
 
     public LabServer(String token, int port, Consumer<String> sink) throws IOException {
         this.token = token;
@@ -117,11 +138,12 @@ public final class LabServer implements AutoCloseable {
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             String hello = readLine(in);
             String[] p = hello == null ? new String[0] : hello.split("\t", 2);
+            if (p.length > 0 && p[0].equals("#INSTRUCTOR")) { instructorSession(s, in, id, ip, p.length > 1 ? p[1] : ""); return; }
             if (p.length < 2 || !p[0].equals(token)) { log("warn", "Rejected " + ip + " (wrong password)"); return; }
             s.setSoTimeout(0);
             String host = clean(p[1]).trim();
             c = new Client(id, host.isEmpty() ? "student" : host.substring(0, Math.min(host.length(), 64)), ip, s);
-            startWriter(c);
+            startWriter(c.sock, c.out);
             synchronized (board) { // register and replay under one lock so the late joiner sees every stroke exactly once
                 clients.put(id, c);
                 if (boardOpen) for (String stroke : board) c.send("WB\t" + stroke);
@@ -151,19 +173,100 @@ public final class LabServer implements AutoCloseable {
         if (!st.isEmpty()) log("info", c.host + " reconnected: lock and web rules restored");
     }
 
-    private void startWriter(Client c) {
+    private void startWriter(Socket sock, BlockingQueue<String> queue) {
         pool.execute(() -> {
             try {
-                Writer w = new BufferedWriter(new OutputStreamWriter(c.sock.getOutputStream(), StandardCharsets.UTF_8));
+                Writer w = new BufferedWriter(new OutputStreamWriter(sock.getOutputStream(), StandardCharsets.UTF_8));
                 while (true) {
-                    w.write(c.out.take());
+                    w.write(queue.take());
                     w.write('\n');
                     w.flush();
                 }
             } catch (IOException | InterruptedException e) {
-                try { c.sock.close(); } catch (IOException ignored) { } // wakes the reader, which cleans up
+                try { sock.close(); } catch (IOException ignored) { } // wakes the reader, which cleans up
             }
         });
+    }
+
+    // ---- co-instructors ----
+
+    /** Waits for the host's approval, then runs the co-instructor's commands until it leaves. */
+    private void instructorSession(Socket s, BufferedReader in, String id, String ip, String rawName) throws IOException {
+        String name = clean(rawName).trim();
+        name = name.isEmpty() ? "Instructor" : name.substring(0, Math.min(name.length(), 64));
+        Instructor ins = new Instructor(id, name, ip, s);
+        s.setSoTimeout(0);
+        instructors.put(id, ins);
+        startWriter(s, ins.out);
+        emitHost("COJOIN", id, name, ip);
+        log("info", name + " (" + ip + ") asks to join this class as a co-instructor");
+        timer.schedule(() -> { if (!ins.approved && instructors.containsKey(id)) coAccept(id, false); }, 2, TimeUnit.MINUTES); // nobody answered
+        try {
+            for (String line; (line = readLine(in)) != null; ) {
+                if (!ins.approved) continue; // nothing counts before the host says yes
+                actor.set(name);
+                try { control(line, true); }
+                catch (RuntimeException e) { ins.out.offer("LOG\terror\t" + clean(e.getMessage() == null ? e.toString() : e.getMessage())); }
+                finally { actor.remove(); }
+            }
+        } finally {
+            instructors.remove(id);
+            emitHost("COGONE", id);
+            if (ins.approved) log("info", name + " left the class");
+        }
+    }
+
+    /** Host's answer to a join request. Approval sends a snapshot of the class, then live events. */
+    public void coAccept(String id, boolean ok) {
+        Instructor ins = instructors.get(id);
+        if (ins == null || ins.approved) return;
+        if (!ok) {
+            instructors.remove(id);
+            ins.out.offer("COREJECT\tThe instructor who started the class declined");
+            timer.schedule(() -> { try { ins.sock.close(); } catch (IOException ignored) { } }, 500, TimeUnit.MILLISECONDS); // let the reply go out first
+            emitHost("COGONE", id);
+            log("info", "Declined co-instructor " + ins.name);
+            return;
+        }
+        synchronized (fanout) { // nothing can be emitted between the snapshot and going live, so no event is missed
+            ins.out.offer("JOINED\t" + port());
+            for (String line : snapshot()) ins.out.offer(line);
+            ins.approved = true;
+        }
+        log("info", ins.name + " joined as a co-instructor");
+    }
+
+    /** The class as event lines, for an instructor who joins late. Events are idempotent, so a duplicate is harmless. */
+    List<String> snapshot() {
+        List<String> lines = new ArrayList<>();
+        for (Client c : clients.values()) {
+            lines.add(line("ADDED", c.id, c.host, c.ip));
+            if (!c.student.isEmpty()) lines.add(line("STUDENT", c.id, c.student));
+            if (c.shareRequest) lines.add(line("SHAREREQ", c.id, "1"));
+            lines.add(line("STATUS", c.id, c.status, c.locked ? "1" : "0", "" + c.lastSeen));
+        }
+        lines.add(line("SHARE", String.join(",", sharing)));
+        Client p = presenter;
+        lines.add(line("PRESENTER", p == null ? "" : p.id));
+        lines.add(line("LIVESTATE", liveOn ? "1" : "0"));
+        return lines;
+    }
+
+    /** One control line from the host (stdin) or a co-instructor (fromInstructor). */
+    public void control(String line, boolean fromInstructor) {
+        String[] p = line.split("\t", 4);
+        switch (p[0]) {
+            case "SEND" -> send(p[1].isEmpty() ? List.of() : List.of(p[1].split(",")), p[2], p.length > 3 ? p[3] : "");
+            case "REMOTE" -> remote(p[1], p[2], p.length > 3 ? p[3] : "");
+            case "WB" -> whiteboard(p[1]);
+            case "LIVE" -> setLive(p[1].equals("1"), 2000);
+            case "PRESENT" -> present(p[1], p.length > 2 ? p[2] : "0");
+            case "FORGET", "COACCEPT" -> {
+                if (fromInstructor) throw new IllegalArgumentException("Only the instructor who started the class can do that");
+                if (p[0].equals("FORGET")) forget(p[1]); else coAccept(p[1], p.length > 2 && p[2].equals("1"));
+            }
+            default -> throw new IllegalArgumentException("Unknown control line " + clean(p[0]));
+        }
     }
 
     /** readLine with a size cap; BufferedReader.readLine would buffer any amount. */
@@ -468,6 +571,8 @@ public final class LabServer implements AutoCloseable {
     public void setLive(boolean on, long ms) {
         if (live != null) live.cancel(false);
         live = null;
+        liveOn = on;
+        emit("LIVESTATE", on ? "1" : "0"); // every instructor's switch shows the same thing
         log("info", on ? "Live view on" : "Live view off");
         if (!on) return;
         live = timer.scheduleAtFixedRate(() -> {
@@ -520,12 +625,34 @@ public final class LabServer implements AutoCloseable {
 
     private void emitShare() { emit("SHARE", String.join(",", sharing)); }
 
-    private void log(String level, String msg) { emit("LOG", level, msg); }
+    private void log(String level, String msg) {
+        String by = actor.get();
+        emit("LOG", level, by == null ? msg : by + ": " + msg);
+    }
 
-    private void emit(String... fields) {
+    static String line(String... fields) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < fields.length; i++) sb.append(i > 0 ? "\t" : "").append(clean(fields[i]));
-        sink.accept(sb.toString());
+        return sb.toString();
+    }
+
+    /** To the host app and every approved co-instructor. */
+    private void emit(String... fields) {
+        String l = line(fields);
+        boolean image = fields[0].equals("THUMB") || fields[0].equals("FRAME");
+        synchronized (fanout) {
+            sink.accept(l);
+            for (Instructor i : instructors.values()) {
+                if (!i.approved) continue;
+                if (image) { if (i.out.size() < 64) i.out.offer(l); continue; } // slow link: skip pictures, never state
+                if (!i.out.offer(l)) { try { i.sock.close(); } catch (IOException ignored) { } } // hopelessly behind: drop it, it can rejoin
+            }
+        }
+    }
+
+    /** Only to the host app (join requests are the host's decision). */
+    private void emitHost(String... fields) {
+        synchronized (fanout) { sink.accept(line(fields)); }
     }
 
     /** Fields are tab separated and one per line, so no tabs or newlines inside a field. */
@@ -543,6 +670,7 @@ public final class LabServer implements AutoCloseable {
         try { server.close(); } catch (IOException ignored) { }
         if (beaconSocket != null) beaconSocket.close();
         for (Client c : clients.values()) { try { c.sock.close(); } catch (IOException ignored) { } }
+        for (Instructor i : instructors.values()) { try { i.sock.close(); } catch (IOException ignored) { } }
         sharing.clear();
         timer.shutdownNow();
         pool.shutdownNow();
@@ -571,14 +699,11 @@ public final class LabServer implements AutoCloseable {
                             sink.accept("STARTFAIL\t" + clean(String.valueOf(e.getMessage())));
                         }
                     }
-                    case "SEND" -> lab.send(p[1].isEmpty() ? List.of() : List.of(p[1].split(",")), p[2], p.length > 3 ? p[3] : "");
-                    case "REMOTE" -> lab.remote(p[1], p[2], p.length > 3 ? p[3] : "");
-                    case "WB" -> lab.whiteboard(p[1]);
-                    case "LIVE" -> lab.setLive(p[1].equals("1"), 2000);
-                    case "PRESENT" -> lab.present(p[1], p.length > 2 ? p[2] : "0");
-                    case "FORGET" -> lab.forget(p[1]);
                     case "STOP" -> { if (lab != null) { lab.endClass(); lab.close(); } return; }
-                    default -> sink.accept("LOG\terror\tUnknown control line " + clean(p[0]));
+                    default -> {
+                        if (lab == null) throw new IllegalStateException("The class has not started");
+                        lab.control(line, false);
+                    }
                 }
             } catch (RuntimeException e) {
                 sink.accept("LOG\terror\t" + clean(String.valueOf(e)));

@@ -1,7 +1,9 @@
 // Lab server written in Java (backend/LabServer.java), run as a child process.
 // Same interface and events as lab.js, so main.js and the UI don't care which one is behind them.
 // Control lines go to its stdin and events come back on stdout, both tab separated (see LabServer.java).
+// join() instead connects to another instructor's class over TCP and speaks the same lines (co-instructor).
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const readline = require('node:readline');
@@ -18,6 +20,7 @@ class JavaLab extends EventEmitter {
     this.pcs = new Map(); // id -> { id, host, ip, status, lastSeen, thumb, locked }
     this.sharing = new Set();
     this.proc = null;
+    this.sock = null;     // co-instructor connection (join), instead of proc
     this.started = null;
   }
 
@@ -55,9 +58,50 @@ class JavaLab extends EventEmitter {
     return this.started;
   }
 
+  /** Join a class another instructor started (co-instructor). Resolves once that instructor accepts. */
+  join(host, port, name = '') {
+    if (this.started) return this.started;
+    this.started = new Promise((resolve, reject) => {
+      let up = false;
+      const s = net.connect(port, host);
+      this.sock = s;
+      this.stopping = false;
+      s.setNoDelay(true);
+      s.setTimeout(10_000, () => { if (!up) s.destroy(new Error(`No answer from ${host}:${port}`)); }); // until it accepts we only wait for the host's click
+      s.once('connect', () => {
+        s.setTimeout(0);
+        s.write(`#INSTRUCTOR\t${oneLine(name).replace(/\t/g, ' ')}\n`);
+        this.#log(`Waiting for the instructor at ${host} to accept you…`);
+      });
+      s.on('error', (e) => { if (!up) reject(new Error(e.code === 'ECONNREFUSED' ? `No class is running at ${host}:${port}` : e.message)); });
+      s.on('close', () => {
+        if (!up) reject(new Error('The instructor who started the class did not accept'));
+        else if (!this.stopping) { this.#log('The instructor who started the class ended it', 'error'); this.#clear(); this.emit('event', { type: 'ended' }); }
+        if (this.sock === s) { this.sock = null; this.started = null; }
+      });
+      readline.createInterface({ input: s }).on('line', (l) => {
+        const p = l.split('\t');
+        if (p[0] === 'JOINED') { up = true; resolve(Number(p[1])); }
+        else if (p[0] === 'COREJECT') reject(new Error(p[1] || 'The instructor declined'));
+        else this.#onEvent(p);
+      });
+    });
+    this.started.catch(() => { this.started = null; });
+    return this.started;
+  }
+
+  /** Host only: answer a co-instructor's join request. */
+  coaccept(id, ok) {
+    this.#write(`COACCEPT\t${oneLine(id)}\t${ok ? 1 : 0}`);
+    return true;
+  }
+
+  role() { return this.sock ? 'co' : 'host'; }
+
   stop() {
     const proc = this.proc;
     this.stopping = true;
+    if (this.sock) { this.sock.end(); this.sock = null; this.started = null; this.#clear(); return; } // co-instructor: just leave, the class goes on
     this.#write('STOP'); // the server releases every student (unlock, unblock, board off) before it exits
     proc?.stdin.end();
     if (proc) setTimeout(() => proc.kill(), 3000).unref();
@@ -107,7 +151,8 @@ class JavaLab extends EventEmitter {
   setLive(on) { this.#write(`LIVE\t${on ? 1 : 0}`); }
 
   #write(line) {
-    if (this.proc && !this.proc.stdin.destroyed) this.proc.stdin.write(line + '\n');
+    const w = this.sock ?? this.proc?.stdin;
+    if (w && !w.destroyed) w.write(line + '\n');
   }
 
   #clear() {
@@ -167,6 +212,15 @@ class JavaLab extends EventEmitter {
         break;
       case 'LOG':
         this.#log(p[2], p[1]);
+        break;
+      case 'LIVESTATE':
+        this.emit('event', { type: 'live', on: p[1] === '1' });
+        break;
+      case 'COJOIN':
+        this.emit('event', { type: 'cojoin', id: p[1], name: p[2] ?? '', ip: p[3] ?? '' });
+        break;
+      case 'COGONE':
+        this.emit('event', { type: 'cogone', id: p[1] });
         break;
     }
   }

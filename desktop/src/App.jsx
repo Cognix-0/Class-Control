@@ -12,6 +12,7 @@ import ActivityLog from './components/ActivityLog.jsx';
 import Whiteboard from './components/Whiteboard.jsx';
 import LayoutEditor from './components/LayoutEditor.jsx';
 import Toasts from './components/Toasts.jsx';
+import ConfirmModal from './components/ConfirmModal.jsx';
 import Inbox from './components/Inbox.jsx';
 import PresenterPip from './components/PresenterPip.jsx';
 import { threadKey, who } from './names.js';
@@ -30,6 +31,7 @@ export default function App() {
   const [view, setView] = useState('3d');
   const [panel, setPanel] = useState(null);
   const [live, setLive] = useState(false);
+  const [joinReqs, setJoinReqs] = useState([]); // co-instructors waiting for the host's answer
   const [sharing, setSharing] = useState(new Set());
   const [logs, setLogs] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -77,6 +79,10 @@ export default function App() {
       if (panelRef.current !== 'messages') setUnread((u) => u + 1);
       toast(`${pc ? who(pc) : 'A student'} asks to share their screen. Open Messages to allow it.`, 'warn');
     }
+    else if (e.type === 'live') setLive(e.on); // another instructor may have flipped it
+    else if (e.type === 'cojoin') setJoinReqs((r) => [...r.filter((x) => x.id !== e.id), e]);
+    else if (e.type === 'cogone') setJoinReqs((r) => r.filter((x) => x.id !== e.id));
+    else if (e.type === 'ended') { setSession(null); setPcs({}); toast('The instructor who started the class ended it', 'warn'); }
     else if (e.type === 'log') {
       setLogs((l) => [...l.slice(-400), { ...e, id: ++seq }]);
       if (e.level !== 'info') toast(e.msg, e.level);
@@ -183,7 +189,8 @@ export default function App() {
   if (!layout) return <div className="start"><div className="pulse" /></div>;
 
   const online = pcList.filter((p) => p.status !== 'stuck').length;
-  const address = `${info.ips[0] ?? 'this-pc'} : ${session.port}`;
+  const address = `${session.coHost ?? info.ips[0] ?? 'this-pc'} : ${session.port}`;
+  const answerJoin = (id, ok) => { setJoinReqs((r) => r.filter((x) => x.id !== id)); call(window.lab.coaccept(id, ok)); };
   const sel = [...selected];
   const sharingAll = sel.length > 0 && sel.every((id) => sharing.has(id));
   const focusPc = focusId && pcs[focusId];
@@ -196,7 +203,7 @@ export default function App() {
     <div className="app">
       <TopBar online={online} total={pcList.length} live={live} onLive={toggleLive} view={view} onView={setView} onRecenter={() => pick(null)}
         panel={panel} onPanel={openPanel} address={address} sharing={sharing.size} unread={unread}
-        boardLive={boardLive} onBoard={() => { setBoardLive(true); setBoardOpen(true); }} />
+        boardLive={boardLive} onBoard={() => { setBoardLive(true); setBoardOpen(true); }} co={!!session.coHost} />
       <div className="stage-area">
         <div className="map">
           {view === '3d'
@@ -209,7 +216,7 @@ export default function App() {
               <InfoCard pc={focusPc} seat={seatByKey.get(seatOf.get(focusId))} onRemote={() => setRemoteId(focusId)} onAction={(cmd) => cardAction(focusId, cmd)} onClose={() => setFocusId(null)} />
             </div>
           )}
-          {pcList.length === 0 && (
+          {pcList.length === 0 && !session.coHost && (
             <div className="waiting">
               <div className="pulse" />
               <div>
@@ -233,6 +240,11 @@ export default function App() {
       </div>
       {boardLive && <Whiteboard visible={boardOpen} onMinimise={() => setBoardOpen(false)} onStop={() => { setBoardLive(false); setBoardOpen(false); }} />}
       {remotePc && <RemoteView pc={remotePc} onClose={() => setRemoteId(null)} onSend={(cmd, arg) => send(cmd, arg, [remotePc.id])} />}
+      {joinReqs[0] && (
+        <ConfirmModal title={`${joinReqs[0].name} wants to teach this class with you`}
+          body={`They will see every student PC and can message, lock and control them, just like you. Their computer: ${joinReqs[0].ip}`}
+          confirm="Allow" cancel="Decline" onYes={() => answerJoin(joinReqs[0].id, true)} onNo={() => answerJoin(joinReqs[0].id, false)} />
+      )}
       <Toasts items={toasts} />
     </div>
   );

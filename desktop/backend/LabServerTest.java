@@ -25,6 +25,21 @@ public class LabServerTest {
         throw new AssertionError("no " + type + " event");
     }
 
+    /** Reads lines from a socket until one starts with `prefix`. */
+    static String until(Agent a, String prefix) throws IOException {
+        for (String l; (l = a.next()) != null; ) if (l.startsWith(prefix)) return l;
+        throw new AssertionError("connection closed before " + prefix);
+    }
+
+    /** Next sink event containing `text`. */
+    static String eventWith(BlockingQueue<String> q, String text) throws Exception {
+        for (long end = System.currentTimeMillis() + 5000; System.currentTimeMillis() < end; ) {
+            String e = q.poll(100, TimeUnit.MILLISECONDS);
+            if (e != null && e.contains(text)) return e;
+        }
+        throw new AssertionError("no event with " + text);
+    }
+
     static final class Agent {
         final Socket s;
         final BufferedReader in;
@@ -188,9 +203,49 @@ public class LabServerTest {
             eq("Wrong registration number or password", new LabServer.Roster(file).check("IT1", "b"));
             java.nio.file.Files.delete(file);
 
+            // ---- co-instructor: a second instructor app joins this class instead of starting its own ----
+            events.clear();
+            Agent kid = new Agent(port, "pw\tPC09");
+            String kidId = event(events, "ADDED").split("\t")[1];
+            Agent co2 = new Agent(port, "#INSTRUCTOR\tMr Silva");                 // a join request the host declines
+            String id2 = event(events, "COJOIN").split("\t")[1];
+            co2.out.println("SEND\t\tMSG\tsneaky");                             // ignored: never approved
+            co2.out.println("LIVE\t1");
+            Thread.sleep(200);
+            lab.coAccept(id2, false);
+            eq("COREJECT\tThe instructor who started the class declined", co2.next());
+            eq(null, co2.next());                                                  // and the connection is closed
+            event(events, "COGONE");
+            Agent co = new Agent(port, "#INSTRUCTOR\tMs Perera");
+            String[] join = event(events, "COJOIN").split("\t");
+            eq("Ms Perera", join[2]);
+            lab.control("COACCEPT\t" + join[1] + "\t1", false);
+            eq("JOINED\t" + port, co.next());
+            boolean sawKid = false;                                                // snapshot: the class as it is now
+            String l;
+            while (!(l = co.next()).startsWith("LIVESTATE")) if (l.equals("ADDED\t" + kidId + "\tPC09\t127.0.0.1")) sawKid = true;
+            eq(true, sawKid);
+            eq("LIVESTATE\t0", l);                                                // the declined request's LIVE 1 never ran
+            co.out.println("SEND\t" + kidId + "\tMSG\thello from co");          // co-instructor commands reach students
+            eq("MSG\thello from co", kid.next());                                 // and the earlier "sneaky" never did
+            eventWith(events, "Ms Perera: MSG");                                   // the host's activity log says who did it
+            lab.send(List.of(kidId), "LOCK", "");                                  // host actions show up on the co-instructor too
+            eq("LOCK\tEyes on the instructor", kid.next());
+            eq("STATUS\t" + kidId + "\tlocked\t1", until(co, "STATUS\t" + kidId).substring(0, ("STATUS\t" + kidId + "\tlocked\t1").length()));
+            co.out.println("FORGET\tIT23001");                                    // host-only
+            eq("LOG\terror\tOnly the instructor who started the class can do that", until(co, "LOG\terror"));
+            co.out.println("LIVE\t1");                                            // shared switch: everyone sees the new state
+            eventWith(events, "LIVESTATE\t1");
+            co.out.println("LIVE\t0");
+            eventWith(events, "LIVESTATE\t0");
+            co.s.close();
+            event(events, "COGONE");
+            lab.send(List.of(kidId), "UNLOCK", "");
+            kid.s.close();
+
             // ---- end of class releases everyone ----
             lab.endClass();
-            eq("WB\toff", clean.next());
+            eq("WB\toff", until(clean, "WB\t"));                               // skip thumbnail polls from the live-view check above
             eq("SCREENOFF\t", clean.next());
             eq("UNBLOCK\t", clean.next());
             eq("UNLOCK\t", clean.next());
