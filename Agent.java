@@ -4,6 +4,15 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.util.Base64;
 import javax.imageio.ImageIO;
 import java.util.regex.Pattern;
@@ -18,10 +27,12 @@ import java.util.concurrent.*;
 
 /**
  * Student agent (Java 17+). Run as Administrator on Windows (hosts file, firewall, policies):
- *   java Agent.java                       finds the instructor on the LAN by itself (asks for the class password once)
- *   java Agent.java <teacherIP|auto> <token> [port]
+ * Talks to the instructor over TLS 1.3 only, and only to a certificate whose public key matches the pinned
+ * instructor key (see Pinned): without that key it does not connect at all.
+ *   java Agent.java                       finds the instructor on the LAN by itself (needs instructorKey in ~/.classcontrol-agent.properties)
+ *   java Agent.java <teacherIP|auto> <token> [port] [instructorKey]
  *   java Agent.java --app                 driven by the student desktop app over stdin/stdout (no window, no dialogs):
- *     stdin : CONNECT host|auto port token regNo password | CHAT text | SHARE 1|0 | LOGOUT      (tab separated)
+ *     stdin : CONNECT host|auto port token regNo password [instructorKey] | CHAT text | SHARE 1|0 | LOGOUT   (tab separated)
  *     stdout: STATE searching|connecting|loggedin|badlogin|rejected|offline|loggedout detail
  *             MSG text | VIEWED 1|0 | SHARING 1|0|deny | LOG text
  */
@@ -32,6 +43,12 @@ public class Agent {
     static final int DISCOVERY_PORT = 5758;   // UDP: the instructor announces itself here
     static final int FILTER_PORT = 5760;      // loopback web filter (falls back to a free port)
     static final Path CONFIG = Path.of(System.getProperty("user.home"), ".classcontrol-agent.properties");
+    static final String NOT_YOURS = "This is not your instructor's PC";
+    static final String NO_KEY = "Ask your lecturer for the instructor key";
+    /** Instructors we won't talk to for a minute: wrong class password, or they could not prove who they are. */
+    static final Map<String, Long> skip = new ConcurrentHashMap<>();
+    static volatile String pinnedKey = "";            // the lecturer's key fingerprint, from Settings / the properties file
+    static volatile String rejected;                  // set when a connection was dropped because the proof failed
     static final java.util.List<JFrame> locks = new ArrayList<>();
     static javax.swing.Timer lockTimer;
     static JFrame view;
@@ -75,7 +92,8 @@ public class Agent {
     public static void main(String[] a) throws Exception {
         if (a.length > 0 && a[0].equals("--app")) { runApp(); return; }
         String host = a.length > 0 ? a[0] : "auto";
-        token = a.length > 1 ? a[1] : savedToken();
+        token = a.length > 1 ? a[1] : saved("token");
+        pinnedKey = fp(a.length > 3 ? a[3] : saved("instructorKey"));
         if (token == null && !host.equals("auto")) token = askPassword("Class password (ask your instructor):"); // auto: the instructor may share it
         if (token != null && token.isEmpty()) return;
         int fixedPort = a.length > 2 ? Integer.parseInt(a[2]) : 5757;
@@ -102,12 +120,22 @@ public class Agent {
             f.setVisible(true);
         });
         log("Agent started, " + (host.equals("auto") ? "looking for the instructor on this network" : "teacher=" + host + ":" + fixedPort));
-        Map<String, Long> skip = new HashMap<>(); // instructors that rejected our password, ignored for a minute
         int rejects = 0;
+        boolean said = false; // the "no instructor key" note is already in the log
         while (true) { // reconnect forever so a teacher restart doesn't strand the PC
             String h = host;
             int port = fixedPort;
             String who = host;
+            pinnedKey = fp(a.length > 3 ? a[3] : saved("instructorKey")); // the lecturer may add the key while we wait
+            String block = keyBlock();
+            if (block != null) {
+                setStatus(block, Color.RED);
+                if (!said) log(block + ": put it in " + CONFIG + " as instructorKey=<key>, or pass it as the 4th argument"); // once: we re-check every 5 s
+                said = true;
+                Thread.sleep(5000);
+                continue;
+            }
+            said = false;
             if (host.equals("auto")) {
                 setStatus("Looking for your instructor...", Color.GRAY);
                 String[] found = discover(5000, skip);
@@ -120,18 +148,28 @@ public class Agent {
             }
             setStatus("Connecting to " + who + "...", Color.GRAY);
             long connectedAt = System.currentTimeMillis();
-            try (Socket s = new Socket(h, port)) {
+            rejected = null;
+            try (Socket s = connect(h, port, 5000)) {
                 setStatus("Connected to " + who, new Color(0, 130, 0));
                 new Thread(() -> { // still connected after 3 s: the password was accepted, remember it
                     try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
                     if (!s.isClosed()) saveToken(token);
                 }).start();
                 session(s, who, me, null);
+            } catch (SSLException e) {   // wrong certificate, or not a Class Control server at all
+                rejected = NOT_YOURS;
+                log(NOT_YOURS + " (" + who + "): " + e.getMessage());
             } catch (IOException e) {
                 setStatus("Cannot reach teacher - retrying", Color.RED);
                 log("Cannot reach " + who + " - " + e.getMessage());
             }
             ended();
+            if (rejected != null) { // not our lecturer's key: stay away from that PC for a minute
+                setStatus(rejected, Color.RED);
+                skip.put(h, System.currentTimeMillis() + 60_000);
+                Thread.sleep(3000);
+                continue;
+            }
             if (System.currentTimeMillis() - connectedAt < 3000) { // dropped straight away: almost always a wrong password
                 skip.put(h, System.currentTimeMillis() + 60_000);
                 setStatus("Rejected - wrong password?", Color.RED);
@@ -158,10 +196,10 @@ public class Agent {
             SwingUtilities.invokeLater(() -> info.setText(connection));
         }
         PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"), true);
-        out.println(token + "\t" + me);
+        BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));
+        out.println(token + "\t" + me);   // the TLS handshake (Agent.connect) already proved this is the lecturer's PC
         if (login != null) out.println(login);
         toTeacher = out;
-        BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));
         for (String line; (line = in.readLine()) != null; ) {
             if (!line.matches("(SCREEN|THUMB|MOUSE|KEY|VIEW|WB|LOGIN)\\b.*")) log("Teacher: " + line.replace("\t", " "));
             handle(line.split("\t", 2));
@@ -193,7 +231,7 @@ public class Agent {
             String[] p = line.split("\t", -1);
             String arg = p.length > 1 ? p[1] : "";
             switch (p[0]) {
-                case "CONNECT" -> { if (p.length >= 6) restart(Arrays.copyOfRange(p, 1, 6)); }
+                case "CONNECT" -> { if (p.length >= 6) restart(Arrays.copyOfRange(p, 1, 7)); } // 7th field (instructor key) may be missing: copyOfRange pads with null
                 case "LOGOUT" -> {
                     PrintWriter out = toTeacher;
                     if (out != null) out.println("LOGOUT");
@@ -233,9 +271,16 @@ public class Agent {
             int port;
             try { port = Integer.parseInt(st[1].trim()); } catch (NumberFormatException e) { port = 5757; }
             token = st[2];
+            pinnedKey = fp(st.length > 5 ? st[5] : null);
+            String block = keyBlock();
+            if (block != null) { // without the key we cannot tell the lecturer's PC from a classmate's laptop
+                emit("STATE", "rejected", block + " and enter it in Settings.");
+                synchronized (wake) { if (settings == st) settings = null; }
+                continue;
+            }
             if (h.equals("auto")) {
                 emit("STATE", "searching", "Looking for your instructor on this network...");
-                String[] found = discover(4000, new HashMap<>());
+                String[] found = discover(4000, skip);
                 if (found == null) {
                     if (st == settings) emit("STATE", "searching", "No instructor found on this network yet. If it stays like this, enter the instructor's IP in Settings.");
                     continue;
@@ -253,16 +298,24 @@ public class Agent {
             }
             emit("STATE", "connecting", "Connecting to " + who + "...");
             loginReply = null;
+            rejected = null;
             boolean reached = false;
-            try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress(h, port), 5000);
+            try (Socket s = connect(h, port, 5000)) {
                 reached = true;
                 session(s, who, me, "LOGIN\t" + st[3] + "\t" + st[4]);
+            } catch (SSLException e) {   // the certificate is not the one this PC pinned
+                rejected = NOT_YOURS;
             } catch (IOException e) {
                 if (!reached && st == settings) emit("STATE", "offline", "Cannot reach " + who + " (" + e.getMessage() + "). Retrying...");
             }
             ended();
             if (st != settings) continue; // settings changed or logged out: start again right away
+            if (rejected != null) { // the key did not match: say so and stop trying that PC for a minute
+                emit("STATE", "rejected", rejected + ". Check the instructor key in Settings.");
+                skip.put(h, System.currentTimeMillis() + 60_000);
+                synchronized (wake) { if (settings == st) settings = null; }
+                continue;
+            }
             String r = loginReply;
             if (reached && r == null) { // dropped without an answer: the class password was wrong
                 emit("STATE", "rejected", "The instructor rejected the class password. Check Settings.");
@@ -299,6 +352,75 @@ public class Agent {
         return null;
     }
 
+    // ---- is this really my lecturer's PC? (TLS 1.3 with a pinned certificate, see LabServer.Identity) ----
+
+    /** A pinned fingerprint in the form we compare: lower-case hex, "" if it is too short to mean anything. */
+    static String fp(String s) {
+        if (s == null) return "";
+        String hex = s.toLowerCase(Locale.ROOT).replaceAll("[^0-9a-f]", "");
+        return hex.length() < 16 ? "" : hex;   // 64 hex = the whole key; at least 16 = a prefix the lecturer read out
+    }
+
+    /** SHA-256 of a certificate's public key (SubjectPublicKeyInfo), the way the instructor app shows it. */
+    static String fpOf(byte[] publicKeyInfo) throws GeneralSecurityException {
+        return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(publicKeyInfo));
+    }
+
+    /**
+     * Trusts exactly one certificate: the lecturer's, by its pinned public key. Not a trust-all manager and never
+     * a fallback - no pinned key, a different key, a missing chain or any error all mean "not my instructor".
+     */
+    static final class Pinned implements X509TrustManager {
+        @Override public void checkClientTrusted(X509Certificate[] chain, String type) throws CertificateException {
+            throw new CertificateException("The agent is never a server");
+        }
+
+        @Override public void checkServerTrusted(X509Certificate[] chain, String type) throws CertificateException {
+            String want = pinnedKey;
+            if (want.isEmpty() || chain == null || chain.length == 0) throw new CertificateException(NOT_YOURS);
+            try {
+                if (!fpOf(chain[0].getPublicKey().getEncoded()).startsWith(want)) throw new CertificateException(NOT_YOURS);
+            } catch (GeneralSecurityException e) {
+                throw new CertificateException(NOT_YOURS);
+            }
+        }
+
+        @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+    }
+
+    /**
+     * Opens the only kind of connection this agent makes: TLS 1.3 to a server holding the pinned certificate.
+     * The handshake happens here, so nothing - class password, login, screen - is ever sent to an unverified PC.
+     */
+    static SSLSocket connect(String host, int port, int timeoutMs) throws IOException {
+        if (pinnedKey.isEmpty()) throw new SSLException(NO_KEY);
+        SSLSocket s = null;
+        try {
+            SSLContext ctx = SSLContext.getInstance("TLSv1.3");
+            ctx.init(null, new TrustManager[]{new Pinned()}, null);
+            s = (SSLSocket) ctx.getSocketFactory().createSocket();
+            s.setEnabledProtocols(new String[]{"TLSv1.3"});
+            s.connect(new InetSocketAddress(host, port), timeoutMs);
+            s.setSoTimeout(15_000);   // a PC that stalls mid-handshake must not strand us: the real class is still out there
+            s.startHandshake();
+            s.setSoTimeout(0);
+            return s;
+        } catch (GeneralSecurityException e) {
+            close(s);
+            throw new SSLException(NOT_YOURS);
+        } catch (IOException e) {
+            close(s);
+            throw e;
+        }
+    }
+
+    private static void close(Socket s) {
+        if (s != null) try { s.close(); } catch (IOException ignored) { }
+    }
+
+    /** Connecting at all needs the lecturer's key: without it we cannot tell their PC from a classmate's laptop. */
+    static String keyBlock() { return pinnedKey.isEmpty() ? NO_KEY : null; }
+
     /** "CCLASS1\t<tcpPort>\t<name>[\t<token>]" -> {from, port, name, token or ""}; anything else (other broadcasts, junk) -> null. */
     static String[] parseBeacon(String msg, String from) {
         String[] p = msg.split("\t", 4);
@@ -311,11 +433,11 @@ public class Agent {
         }
     }
 
-    static String savedToken() {
+    static String saved(String key) {
         try (InputStream in = Files.newInputStream(CONFIG)) {
             Properties pr = new Properties();
             pr.load(in);
-            return pr.getProperty("token");
+            return pr.getProperty(key);
         } catch (IOException e) {
             return null;
         }
@@ -326,6 +448,7 @@ public class Agent {
         try (OutputStream out = Files.newOutputStream(CONFIG)) {
             Properties pr = new Properties();
             pr.setProperty("token", t);
+            if (!pinnedKey.isEmpty()) pr.setProperty("instructorKey", pinnedKey); // keep the pinned key: it is what makes the saved password safe to use
             pr.store(out, "Class Control agent");
         } catch (IOException ignored) { }
     }

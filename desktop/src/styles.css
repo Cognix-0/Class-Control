@@ -294,6 +294,9 @@ kbd { font-family: var(--mono); font-size: 10px; padding: 1px 5px; border-radius
 .class-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0 2px; border-top: 1px solid var(--line-soft); margin-top: 8px; }
 .split-warn { font-size: 13px; padding: 12px; border-radius: 10px; border: 1px solid rgba(240, 180, 41, .5); background: rgba(240, 180, 41, .08); }
 .split-warn .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.fp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--bg-2); }
+.fp-row code.fp { display: block; font-size: 12px; letter-spacing: .04em; word-break: break-all; line-height: 1.5; }
+.fp-row .muted { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
 .join-ip { margin-top: 14px; font-size: 13px; }
 .join-ip summary { cursor: pointer; color: var(--muted); }
 .join-ip .row { display: flex; gap: 8px; margin: 10px 0 6px; }

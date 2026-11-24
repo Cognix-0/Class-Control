@@ -3,11 +3,11 @@
 // Control lines go to its stdin and events come back on stdout, both tab separated (see LabServer.java).
 // join() instead connects to another instructor's class over TCP and speaks the same lines (co-instructor).
 const { spawn } = require('node:child_process');
-const net = require('node:net');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const readline = require('node:readline');
 const { javaExecutable } = require('./javaRuntime');
+const { connectPinned } = require('./pinnedTls');
 
 // Inside a packaged app the .java file is unpacked next to app.asar so `java` can read it.
 const SERVER = path.join(__dirname, '..', 'backend', 'LabServer.java').replace('app.asar', 'app.asar.unpacked');
@@ -22,13 +22,18 @@ class JavaLab extends EventEmitter {
     this.proc = null;
     this.sock = null;     // co-instructor connection (join), instead of proc
     this.started = null;
+    this.fingerprint = ''; // the lecturer's key fingerprint, once the server has loaded it
   }
 
-  /** `name` is announced to student PCs on the LAN so they can find this class on their own.
-   *  `roster` = file with the students' password hashes (none = kept in memory, for the demo). */
-  start(token, port, name = '', roster = null, share = false) {
+  /** Starts the Java TLS server. `name` is announced to student PCs on the LAN so they can find this class.
+   *  `roster` = file with the students' password hashes (none = kept in memory, for the demo).
+   *  `keyFile` + `masterPw` = the lecturer's TLS keystore, the certificate student PCs pin (required: a class
+   *  without it would be plaintext). */
+  start(token, port, name = '', roster = null, share = false, keyFile = '', masterPw = '') {
     if (this.started) return this.started;
     if (/[\t\r\n]/.test(token)) return Promise.reject(new Error('The password cannot contain tabs or line breaks'));
+    if (/[\t\r\n]/.test(masterPw)) return Promise.reject(new Error('The master password cannot contain tabs or line breaks'));
+    if (!keyFile) return Promise.reject(new Error('A class needs the instructor certificate'));
     this.started = new Promise((resolve, reject) => {
       let err = '';
       let up = false;
@@ -48,27 +53,28 @@ class JavaLab extends EventEmitter {
         const p = l.split('\t');
         if (p[0] === 'STARTED') { up = true; resolve(Number(p[1])); }
         else if (p[0] === 'STARTFAIL') { reject(new Error(p[1])); proc.kill(); }
+        else if (p[0] === 'KEY') { this.fingerprint = p[1]; this.emit('event', { type: 'key', fingerprint: p[1] }); }
         else this.#onEvent(p);
       });
       this.stopping = false;
       if (roster) this.#write(`ROSTER\t${oneLine(roster)}`);
-      this.#write(`START\t${token}\t${port}\t${oneLine(name).replace(/\t/g, ' ')}\t${share ? 1 : 0}`);
+      this.#write(`START\t${token}\t${port}\t${oneLine(name).replace(/\t/g, ' ')}\t${share ? 1 : 0}\t${oneLine(keyFile)}\t${masterPw}`);
     });
     this.started.catch(() => { this.started = null; });
     return this.started;
   }
 
-  /** Join a class another instructor started (co-instructor). Resolves once that instructor accepts. */
-  join(host, port, name = '') {
+  /** Join a class another instructor started (co-instructor), pinning that instructor's key. Resolves once they accept. */
+  join(host, port, name = '', pin = '') {
     if (this.started) return this.started;
     this.started = new Promise((resolve, reject) => {
       let up = false;
-      const s = net.connect(port, host);
+      const s = connectPinned({ host, port, pin });
       this.sock = s;
       this.stopping = false;
       s.setNoDelay(true);
       s.setTimeout(10_000, () => { if (!up) s.destroy(new Error(`No answer from ${host}:${port}`)); }); // until it accepts we only wait for the host's click
-      s.once('connect', () => {
+      s.once('pinned', () => { // their certificate matched: only now do we say who we are
         s.setTimeout(0);
         s.write(`#INSTRUCTOR\t${oneLine(name).replace(/\t/g, ' ')}\n`);
         this.#log(`Waiting for the instructor at ${host} to accept you…`);

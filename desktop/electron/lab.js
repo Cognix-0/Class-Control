@@ -21,20 +21,10 @@ class Lab extends EventEmitter {
     this.token = '';
   }
 
-  start(token, port) {
-    this.token = String(token);
-    if (this.server) return Promise.resolve(this.server.address().port);
-    return new Promise((resolve, reject) => {
-      const srv = net.createServer((s) => this.#serve(s));
-      srv.once('error', reject);
-      srv.listen(port, () => {
-        srv.off('error', reject);
-        srv.on('error', (e) => this.#log(`Server error: ${e.message}`, 'error'));
-        this.server = srv;
-        this.#log(`Class started on port ${srv.address().port}. Waiting for student PCs…`);
-        resolve(srv.address().port);
-      });
-    });
+  // Refuses to run: it cannot prove to a student PC that this machine is the lecturer's (no instructor key,
+  // see LabServer.Identity), and a backend without that check hands the whole lab to whoever starts a class first.
+  start() {
+    return Promise.reject(new Error('CC_BACKEND=node cannot prove this PC is the instructor\'s. Remove CC_BACKEND=node to use the Java server.'));
   }
 
   stop() {

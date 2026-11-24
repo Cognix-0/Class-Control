@@ -6,15 +6,16 @@ export default function Settings({ value, defaults, onSave, onClose }) {
   const [host, setHost] = useState(value.host ?? '');
   const [port, setPort] = useState(String(value.port ?? 5757));
   const [token, setToken] = useState(value.token ?? '');
+  const [key, setKey] = useState(value.instructorKey ?? '');
   const [show, setShow] = useState(false);
   const [error, setError] = useState('');
 
   async function save(e) {
     e.preventDefault();
-    const err = await onSave({ host: host.trim(), port: Number(port), token });
+    const err = await onSave({ host: host.trim(), port: Number(port), token, instructorKey: key });
     if (err) setError(err);
   }
-  const reset = () => { if (defaults) { setHost(defaults.host ?? ''); setPort(String(defaults.port ?? 5757)); setToken(defaults.token ?? ''); } };
+  const reset = () => { if (defaults) { setHost(defaults.host ?? ''); setPort(String(defaults.port ?? 5757)); setToken(defaults.token ?? ''); setKey(defaults.instructorKey ?? ''); } };
 
   return (
     <div className="backdrop" onMouseDown={onClose}>
@@ -37,6 +38,11 @@ export default function Settings({ value, defaults, onSave, onClose }) {
               {show ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
+        </div>
+        <div className="field">
+          <label htmlFor="key">Instructor key</label>
+          <input id="key" className="input mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste the whole key from your lecturer" />
+          <small className="muted">Ask your lecturer and paste it whole. Your PC only joins a class run from their computer, so nobody else can lock or watch your screen.</small>
         </div>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="row">

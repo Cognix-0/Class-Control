@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, screen } = require('electron');
 const path = require('node:path');
 const os = require('node:os');
+const fs = require('node:fs');
 const dgram = require('node:dgram');
 const { Lab } = require('./lab');
 const { JavaLab } = require('./javaLab');
@@ -29,17 +30,35 @@ const safe = (fn) => async (_e, ...args) => {
   try { return { ok: true, value: await fn(...args) }; } catch (err) { return { ok: false, error: err.message }; }
 };
 
-ipcMain.handle('lab:start', safe((token, port, share) => {
+// The lecturer's TLS keystore (LabServer.Identity). Students pin its certificate, so only this PC can run their
+// class. The keystore itself needs the master password to open, so the Java side also writes the fingerprint
+// (public information) next to it; that is what the start screen shows before any class is running.
+const keyFile = () => path.join(app.getPath('userData'), 'instructor.p12');
+function identity() {
+  const exists = fs.existsSync(keyFile());
+  try {
+    const hex = fs.readFileSync(path.join(app.getPath('userData'), 'instructor-fingerprint.txt'), 'utf8').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hex)) return { exists, fingerprint: '' };
+    return { exists, fingerprint: hex.match(/.{4}/g).join('-') };
+  } catch {
+    return { exists, fingerprint: '' }; // no class started on this PC yet: the first one creates the certificate
+  }
+}
+
+ipcMain.handle('lab:identity', safe(() => identity()));
+ipcMain.handle('lab:start', safe((token, port, share, master) => {
   if (typeof token !== 'string' || !token.trim()) throw new Error('Enter a class password');
+  if (typeof master !== 'string' || master.length < 8) throw new Error('Enter your master password (at least 8 characters)');
   const p = Number(port);
   if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('Port must be 1-65535');
-  return lab.start(token.trim(), p, os.hostname(), path.join(app.getPath('userData'), 'students.properties'), !!share).catch((e) => {
+  return lab.start(token.trim(), p, os.hostname(), path.join(app.getPath('userData'), 'students.properties'), !!share, keyFile(), master).catch((e) => {
     throw new Error(e.code === 'EADDRINUSE' ? `Port ${p} is already in use (is another console running?)` : e.message);
   });
 }));
 ipcMain.handle('lab:demo', safe(async () => {
-  const port = await lab.start('demo', 0); // random free port so it never clashes with a real class
-  startDemo(port, 'demo');
+  // Its own throwaway certificate: even the demo's simulated PCs connect over TLS and pin it.
+  const port = await lab.start('demo', 0, '', null, false, path.join(app.getPath('userData'), 'demo.p12'), 'class-control-demo');
+  startDemo(port, 'demo', lab.fingerprint);
   return port;
 }));
 // Classes already running on this network (their UDP beacons), so a second instructor joins instead of splitting the room.
@@ -56,15 +75,17 @@ ipcMain.handle('lab:classes', safe(() => new Promise((resolve) => {
   });
   sock.bind(5758, () => setTimeout(done, 2500)); // beacons come every 2 s
 })));
-ipcMain.handle('lab:join', safe((host, port) => {
+ipcMain.handle('lab:join', safe((host, port, key) => {
   if (typeof host !== 'string' || !/^[A-Za-z0-9.:-]{1,253}$/.test(host.trim())) throw new Error('Enter the IP address of the instructor\'s computer');
   const p = Number(port);
   if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('Port must be 1-65535');
+  const pin = String(key ?? '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (pin.length < 16) throw new Error('Ask the other instructor for their instructor key (it is on their start screen)');
   if (!lab.join) throw new Error('Joining a class needs the Java backend');
-  return lab.join(host.trim(), p, os.hostname());
+  return lab.join(host.trim(), p, os.hostname(), pin);
 }));
 ipcMain.handle('lab:coaccept', safe((id, ok) => lab.coaccept(String(id), !!ok)));
-ipcMain.handle('lab:info', safe(() => ({ ips: localIps(), hostname: os.hostname(), sharing: lab.sharingIds(), presenter: lab.presenterId?.() ?? null, role: lab.role?.() ?? 'host' })));
+ipcMain.handle('lab:info', safe(() => ({ ips: localIps(), hostname: os.hostname(), sharing: lab.sharingIds(), presenter: lab.presenterId?.() ?? null, role: lab.role?.() ?? 'host', fingerprint: identity().fingerprint })));
 ipcMain.handle('lab:present', safe((id, mode) => lab.present(String(id ?? ''), String(mode))));
 ipcMain.handle('lab:forget', safe((reg) => lab.forget(String(reg))));
 ipcMain.handle('lab:list', safe(() => lab.list()));

@@ -222,9 +222,9 @@ export default function App() {
               <div>
                 <div style={{ fontWeight: 600 }}>Waiting for student PCs…</div>
                 <div className="muted" style={{ fontSize: 13, margin: '4px 0 8px' }}>Student PCs on this network join by themselves: run the agent as Administrator and enter the class password once. Or connect by hand:</div>
-                <code>java Agent.java {info.ips[0] ?? '<this PC IP>'} {'<password>'} {session.port}</code>
+                <code>java Agent.java {info.ips[0] ?? '<this PC IP>'} {'<password>'} {session.port} {info.fingerprint || '<instructor key>'}</code>
               </div>
-              <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(`java Agent.java ${info.ips[0] ?? ''} ${session.password} ${session.port}`); toast('Command copied (includes the password)'); }}>
+              <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(`java Agent.java ${info.ips[0] ?? ''} ${session.password} ${session.port} ${info.fingerprint ?? ''}`); toast('Command copied (includes the password)'); }}>
                 <Copy size={14} /> Copy
               </button>
             </div>

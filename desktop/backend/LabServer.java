@@ -12,13 +12,24 @@ import java.util.regex.Pattern;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import javax.imageio.ImageIO;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
 import java.nio.file.*;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.cert.Certificate;
 
 /**
- * Instructor-side TCP server. A student agent connects in and sends "token\tcomputerName", then receives
- * "COMMAND\targ" lines. Agents may reply "THUMB\t<b64 jpeg>" and "FRAME\t<b64 jpeg>".
+ * Instructor-side TLS 1.3 server. The certificate in the lecturer's keystore is their identity (see Identity):
+ * a student agent only completes the handshake with a certificate whose public key matches the fingerprint it
+ * pinned, so a classmate's laptop running this app cannot pose as the lecturer, and nothing on the wire is
+ * readable. After the handshake the agent sends "token\tcomputerName" and receives "COMMAND\targ" lines.
+ * Agents may reply "THUMB\t<b64 jpeg>" and "FRAME\t<b64 jpeg>".
  * The student app's agent also sends "LOGIN\treg\tpw", "LOGOUT", "CHAT\ttext", "SHARE\treq|0" and,
  * once the instructor approved it (PRESENT 1), "PFRAME\t<b64 jpeg>", which is shown to the whole class.
  *
@@ -26,10 +37,11 @@ import java.security.SecureRandom;
  * never block the instructor or the other students.
  *
  * Run as a process (the desktop app does this): java LabServer.java
- *   stdin  (tab separated): ROSTER file | START token port [name [share]] (name = announce on the LAN, share 1 = beacon carries the token) | SEND ids cmd arg | REMOTE id cmd arg | WB stroke
+ *   stdin  (tab separated): ROSTER file | START token port name share keyFile masterPw (name = announce on the LAN,
+ *                           share 1 = beacon carries the token, keyFile+masterPw = the lecturer's keystore) | SEND ids cmd arg | REMOTE id cmd arg | WB stroke
  *                           LIVE 1|0 | PRESENT id 1|0|deny | FORGET regNo | STOP
  *                           COACCEPT id 1|0 (host only: answer a co-instructor's join request)
- *   stdout (tab separated): STARTED port | STARTFAIL msg | ADDED id host ip | REMOVED id
+ *   stdout (tab separated): STARTED port | KEY fingerprint | STARTFAIL msg | ADDED id host ip | REMOVED id
  *                           STATUS id status locked lastSeen | THUMB id b64 | FRAME id b64 | SHARE ids | LOG level msg
  *                           STUDENT id regNo | CHAT id text | SHAREREQ id 1|0 | PRESENTER id | LIVESTATE 1|0
  *                           COJOIN id name ip | COGONE id (host only)
@@ -82,6 +94,7 @@ public final class LabServer implements AutoCloseable {
     }
 
     private final String token;
+    private final Identity identity;   // the lecturer's certificate: what students pin
     private final ServerSocket server;
     private final Consumer<String> sink;
     private final ExecutorService pool = Executors.newCachedThreadPool(LabServer::daemon);
@@ -103,15 +116,22 @@ public final class LabServer implements AutoCloseable {
     private final ThreadLocal<String> actor = new ThreadLocal<>(); // co-instructor whose command is running, for the activity log
     private volatile boolean liveOn;
 
-    public LabServer(String token, int port, Consumer<String> sink) throws IOException {
+    public LabServer(String token, int port, Consumer<String> sink, Identity identity) throws IOException {
+        if (identity == null) throw new IllegalArgumentException("A class needs the instructor's certificate"); // never serve a lab in the clear
         this.token = token;
+        this.identity = identity;
         this.sink = sink;
-        this.server = new ServerSocket(port);
+        SSLServerSocket ssl = (SSLServerSocket) identity.ssl.getServerSocketFactory().createServerSocket(port);
+        ssl.setEnabledProtocols(new String[]{"TLSv1.3"});
+        this.server = ssl;
         pool.execute(this::acceptLoop);
         log("info", "Class started on port " + port() + ". Waiting for student PCs…");
     }
 
     public int port() { return server.getLocalPort(); }
+
+    /** What this class's socket will speak; the tests pin it to TLS 1.3 alone. */
+    public List<String> protocols() { return List.of(((SSLServerSocket) server).getEnabledProtocols()); }
 
     private static Thread daemon(Runnable r) { Thread t = new Thread(r); t.setDaemon(true); return t; }
 
@@ -134,7 +154,9 @@ public final class LabServer implements AutoCloseable {
         try (s) {
             s.setTcpNoDelay(true);
             s.setKeepAlive(true);              // notice a student PC that vanished (lid closed, cable pulled)
-            s.setSoTimeout(HANDSHAKE_MS);      // handshake deadline; cleared once authenticated
+            s.setSoTimeout(HANDSHAKE_MS);      // covers the TLS handshake and the first line; cleared once authenticated
+            ((SSLSocket) s).setEnabledProtocols(new String[]{"TLSv1.3"});
+            // The TLS handshake runs here, in this connection's own thread, so a client that stalls cannot hold up the accept loop.
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             String hello = readLine(in);
             String[] p = hello == null ? new String[0] : hello.split("\t", 2);
@@ -152,6 +174,8 @@ public final class LabServer implements AutoCloseable {
             log("info", c.host + " connected");
             restorePolicy(c);
             for (String line; (line = readLine(in)) != null; ) onLine(c, line);
+        } catch (SSLException e) {
+            log("warn", "Rejected " + ip + " (not a Class Control student app, or it does not have this PC's instructor key)");
         } catch (IOException ignored) {
             // peer reset or handshake timeout: same cleanup as a normal disconnect
         } finally {
@@ -455,6 +479,82 @@ public final class LabServer implements AutoCloseable {
     }
 
     /**
+     * The lecturer's TLS identity: a self-signed EC P-256 certificate in <userData>/instructor.p12, created by
+     * keytool from this Java runtime on the first class. Students pin the certificate's public key fingerprint, so
+     * a classmate's laptop running this app cannot pose as the lecturer, and TLS 1.3 also keeps the class password,
+     * student logins, chat and screen frames off the wire in the clear.
+     *
+     * The keystore password is the lecturer's master password and is never stored: a wrong one fails to open the
+     * keystore and the class does not start. It is fed to keytool over stdin, never as a command-line argument,
+     * because anyone on the machine can read another process's arguments.
+     */
+    static final class Identity {
+        static final String ALIAS = "instructor";
+        static final String FINGERPRINT_FILE = "instructor-fingerprint.txt";
+        final SSLContext ssl;
+        final String fingerprint;   // SHA-256 of the certificate's SubjectPublicKeyInfo, 64 lower-case hex characters
+
+        private Identity(SSLContext ssl, String fingerprint) { this.ssl = ssl; this.fingerprint = fingerprint; }
+
+        /** Opens the lecturer's keystore with this master password, creating it on their first class. */
+        static Identity load(Path file, String masterPw) throws IOException, GeneralSecurityException {
+            if (masterPw == null || masterPw.length() < 8) throw new GeneralSecurityException("The master password must be at least 8 characters");
+            if (!Files.exists(file)) create(file, masterPw);
+            char[] pw = masterPw.toCharArray();
+            KeyStore ks = KeyStore.getInstance("PKCS12");
+            try (InputStream in = Files.newInputStream(file)) {
+                ks.load(in, pw);
+            } catch (IOException e) {
+                throw new GeneralSecurityException("Wrong master password"); // a bad password fails the keystore's integrity check
+            }
+            Certificate cert = ks.getCertificate(ALIAS);
+            if (cert == null) throw new GeneralSecurityException("No instructor certificate in " + file.getFileName() + ". Delete it and start the class again to make a new one.");
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(ks, pw);
+            SSLContext ctx = SSLContext.getInstance("TLSv1.3");
+            ctx.init(kmf.getKeyManagers(), null, null);
+            String fingerprint = fingerprint(cert.getPublicKey().getEncoded());
+            // The fingerprint is public, so keep it in a plain file next to the keystore: the UI shows it before any class starts.
+            try { Files.writeString(file.resolveSibling(FINGERPRINT_FILE), fingerprint + "\n"); } catch (IOException ignored) { }
+            return new Identity(ctx, fingerprint);
+        }
+
+        private static void create(Path file, String masterPw) throws IOException, GeneralSecurityException {
+            Path keytool = Path.of(System.getProperty("java.home"), "bin",
+                    System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows") ? "keytool.exe" : "keytool");
+            if (!Files.isExecutable(keytool)) throw new GeneralSecurityException("keytool is missing from this Java installation (" + keytool
+                    + "). Install a full JDK 17 or newer and start the class again.");
+            if (file.getParent() != null) Files.createDirectories(file.getParent());
+            Process proc = new ProcessBuilder(keytool.toString(), "-genkeypair", "-alias", ALIAS, "-keyalg", "EC", "-groupname", "secp256r1",
+                    "-sigalg", "SHA256withECDSA", "-validity", "3650", "-dname", "CN=Class Control Instructor",
+                    "-keystore", file.toString(), "-storetype", "PKCS12").redirectErrorStream(true).start();
+            try (Writer w = new OutputStreamWriter(proc.getOutputStream(), StandardCharsets.UTF_8)) {
+                w.write(masterPw + "\n" + masterPw + "\n"); // keystore password, then its confirmation
+            }
+            String out = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            try {
+                if (!proc.waitFor(60, TimeUnit.SECONDS) || proc.exitValue() != 0) {
+                    proc.destroyForcibly();
+                    Files.deleteIfExists(file); // half-written keystore: start clean next time
+                    throw new GeneralSecurityException("Could not create the instructor certificate: " + clean(out.trim()));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while creating the instructor certificate");
+            }
+        }
+
+        /** What the lecturer reads out and students pin: SHA-256 of the certificate's public key, 64 hex characters. */
+        static String fingerprint(byte[] publicKeyInfo) {
+            try {
+                return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(publicKeyInfo));
+            } catch (GeneralSecurityException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+    }
+
+    /**
      * Student passwords, checked by the instructor (never by the student's own PC). Trust on first use:
      * a reg no's first login sets its password. Saved as salted PBKDF2 hashes; file == null keeps them in memory (demo).
      */
@@ -528,8 +628,10 @@ public final class LabServer implements AutoCloseable {
         }
     }
 
-    /** Announces this instructor on the LAN every 2 s so student agents can find it without typing an IP. */
-    /** shareToken: the beacon also carries the class password, so student apps on this network join without typing it. */
+    /** Announces this instructor on the LAN every 2 s so student agents can find it without typing an IP.
+     *  Plain UDP, no authentication: it only says "a class may be here". What makes a connection safe is the
+     *  pinned certificate, which the agent checks during the TLS handshake before it sends anything.
+     *  shareToken: the beacon also carries the class password, so student apps on this network join without typing it. */
     public void startBeacon(String name, boolean shareToken) throws SocketException {
         beaconSocket = new DatagramSocket();
         beaconSocket.setBroadcast(true);
@@ -683,18 +785,23 @@ public final class LabServer implements AutoCloseable {
         LabServer lab = null;
         Roster roster = new Roster(null);
         for (String line; (line = in.readLine()) != null; ) {
-            String[] p = line.split("\t", 5);
+            String[] p = line.split("\t", 7);
             try {
                 switch (p[0]) {
                     case "ROSTER" -> roster = new Roster(Path.of(p[1]));
                     case "START" -> {
                         try {
-                            lab = new LabServer(p[1], Integer.parseInt(p[2]), sink);
+                            if (p.length < 7 || p[5].isBlank()) throw new GeneralSecurityException("This class has no instructor certificate");
+                            Identity id = Identity.load(Path.of(p[5]), p[6]);
+                            lab = new LabServer(p[1], Integer.parseInt(p[2]), sink, id);
                             lab.setRoster(roster);
                             if (p.length > 3 && !p[3].isBlank()) lab.startBeacon(p[3], p.length > 4 && p[4].equals("1")); // no name (demo): stay off the LAN
                             sink.accept("STARTED\t" + lab.port());
+                            sink.accept("KEY\t" + id.fingerprint);
                         } catch (BindException e) {
                             sink.accept("STARTFAIL\tPort " + p[2] + " is already in use (is another console running?)");
+                        } catch (GeneralSecurityException e) {
+                            sink.accept("STARTFAIL\t" + clean(String.valueOf(e.getMessage())));
                         } catch (IOException e) {
                             sink.accept("STARTFAIL\t" + clean(String.valueOf(e.getMessage())));
                         }
