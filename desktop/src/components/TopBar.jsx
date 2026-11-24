@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Box, Eye, EyeOff, LayoutGrid, LocateFixed, PenLine, Radio } from 'lucide-react';
 
 export default function TopBar({ online, total, live, onLive, view, onView, onRecenter, panel, onPanel, address, sharing, unread, boardLive, onBoard, co }) {
-  const [showAddress, setShowAddress] = useState(false);
   const tab = (id, label) => (
     <button className={panel === id ? 'active' : ''} onClick={() => onPanel(panel === id ? null : id)}>{label}</button>
   );
@@ -21,11 +20,7 @@ export default function TopBar({ online, total, live, onLive, view, onView, onRe
       {sharing > 0 && <span className="live-badge"><Radio size={12} /> SHARING TO {sharing}</span>}
       <button className={`btn sm ${boardLive ? 'on' : ''}`} onClick={onBoard} title="Write on a whiteboard that students see live"><PenLine size={15} /> Whiteboard</button>
       {co && <span className="pill" title="You joined another instructor's class">Co-instructor</span>}
-      <button type="button" className="btn ghost sm address-toggle" onClick={() => setShowAddress((visible) => !visible)}
-        title={showAddress ? 'Hide IP and port' : 'See IP and port'} aria-label={showAddress ? 'Hide IP and port' : 'See IP and port'} aria-pressed={showAddress}>
-        {showAddress ? <EyeOff size={14} /> : <Eye size={14} />}{showAddress ? 'Hide IP & port' : 'See IP & port'}
-      </button>
-      {showAddress && <span className="pill mono" title="Students connect to this address">{address}</span>}
+      <span className="pill mono" title="Students connect to this address">{address}</span>
       <span className="pill"><span className={`dot ${online ? 'online' : ''}`} />{online} of {total} online</span>
       <button className={`switch ${live ? 'on' : ''}`} onClick={() => onLive(!live)} role="switch" aria-checked={live}>
         <span className="track" /> Live screens

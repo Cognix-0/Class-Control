@@ -2,8 +2,20 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
+import java.security.MessageDigest;
+import java.security.cert.Certificate;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /** Checks for the platform-independent parts of Agent.java: beacon parsing, web filter (rules and a live proxy), whiteboard strokes.
  *  Run: javac -d out Agent.java AgentTest.java && java -ea -Djava.awt.headless=true -cp out AgentTest */
@@ -21,7 +33,120 @@ public class AgentTest {
         }
     }
 
+    /** A keystore with a fresh self-signed certificate, made the way LabServer.Identity does: keytool, password on stdin. */
+    static String[] keystore(Path dir, String pw) throws Exception {
+        Path file = dir.resolve("instructor.p12");
+        Path keytool = Path.of(System.getProperty("java.home"), "bin",
+                System.getProperty("os.name", "").toLowerCase().startsWith("windows") ? "keytool.exe" : "keytool");
+        Process proc = new ProcessBuilder(keytool.toString(), "-genkeypair", "-alias", "instructor", "-keyalg", "EC",
+                "-groupname", "secp256r1", "-sigalg", "SHA256withECDSA", "-validity", "3650",
+                "-dname", "CN=Class Control Instructor", "-keystore", file.toString(), "-storetype", "PKCS12")
+                .redirectErrorStream(true).start();
+        try (Writer w = new OutputStreamWriter(proc.getOutputStream(), StandardCharsets.UTF_8)) { w.write(pw + "\n" + pw + "\n"); }
+        String out = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        if (!proc.waitFor(60, TimeUnit.SECONDS) || proc.exitValue() != 0) throw new IllegalStateException("keytool failed: " + out);
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        try (InputStream in = Files.newInputStream(file)) { ks.load(in, pw.toCharArray()); }
+        Certificate cert = ks.getCertificate("instructor");
+        return new String[]{file.toString(), Agent.fpOf(cert.getPublicKey().getEncoded())};
+    }
+
+    /** A TLS 1.3 server holding that keystore, like a real class. */
+    static SSLServerSocket server(String file, String pw) throws Exception {
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        try (InputStream in = Files.newInputStream(Path.of(file))) { ks.load(in, pw.toCharArray()); }
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(ks, pw.toCharArray());
+        SSLContext ctx = SSLContext.getInstance("TLSv1.3");
+        ctx.init(kmf.getKeyManagers(), null, null);
+        SSLServerSocket ss = (SSLServerSocket) ctx.getServerSocketFactory().createServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        ss.setEnabledProtocols(new String[]{"TLSv1.3"});
+        return ss;
+    }
+
+    /** Accepts one connection and reports the first line the agent sent (null = it sent nothing at all). */
+    static Future<String> firstLine(SSLServerSocket ss) {
+        CompletableFuture<String> line = new CompletableFuture<>();
+        Thread t = new Thread(() -> {
+            try (Socket s = ss.accept()) {
+                s.setSoTimeout(5000);
+                line.complete(new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8)).readLine());
+            } catch (Exception e) {
+                line.complete(null);
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        return line;
+    }
+
+    /** The line that reached the server, or null if none did within a few seconds (the agent never connected). */
+    static String within(Future<String> f) {
+        try { return f.get(3, TimeUnit.SECONDS); } catch (Exception e) { return null; }
+    }
+
+    /** True when the agent would not talk to that port: it sent nothing and gave up. */
+    static boolean refused(int port) {
+        try (Socket s = Agent.connect("127.0.0.1", port, 5000)) {
+            return false;
+        } catch (IOException e) {
+            return true;
+        }
+    }
+
     public static void main(String[] args) throws Exception {
+        // ---- only the lecturer's own PC gets the class password (TLS 1.3 with a pinned certificate) ----
+        Path lecturer = Files.createTempDirectory("cclect"), classmate = Files.createTempDirectory("ccmate");
+        String[] real = keystore(lecturer, "lecturerpw");
+        String[] rogue = keystore(classmate, "classmatepw");   // a student's laptop running the instructor app
+        String pin = real[1];
+        eq(64, pin.length());
+        eq(pin, Agent.fp(pin.toUpperCase().replaceAll("(.{4})(?!$)", "$1-"))); // the lecturer reads it out in groups and capitals: same key
+
+        Agent.pinnedKey = pin;
+        try (SSLServerSocket ss = server(real[0], "lecturerpw")) {
+            Future<String> sent = firstLine(ss);
+            try (SSLSocket s = Agent.connect("127.0.0.1", ss.getLocalPort(), 5000)) {  // the real instructor
+                eq("TLSv1.3", s.getSession().getProtocol());
+                new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true).println("pw\tPC01");
+            }
+            eq("pw\tPC01", within(sent));
+        }
+        try (SSLServerSocket ss = server(rogue[0], "classmatepw")) {
+            Future<String> sent = firstLine(ss);
+            eq(true, refused(ss.getLocalPort()));                 // the handshake fails on the certificate
+            eq(null, within(sent));                                 // no class password, no login, nothing
+        }
+        Agent.pinnedKey = Agent.fp(pin.substring(0, 16));         // a short key the lecturer read out: still only their certificate
+        try (SSLServerSocket ss = server(real[0], "lecturerpw")) {
+            Future<String> sent = firstLine(ss);
+            try (SSLSocket s = Agent.connect("127.0.0.1", ss.getLocalPort(), 5000)) {
+                new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true).println("pw\tPC02");
+            }
+            eq("pw\tPC02", within(sent));
+        }
+        try (SSLServerSocket ss = server(rogue[0], "classmatepw")) {
+            eq(true, refused(ss.getLocalPort()));
+        }
+
+        // ---- no pinned key: do not connect at all, whether the IP was found or typed in ----
+        Agent.pinnedKey = "";
+        eq("Ask your lecturer for the instructor key", Agent.keyBlock());
+        try (SSLServerSocket ss = server(real[0], "lecturerpw")) {
+            Future<String> sent = firstLine(ss);
+            eq(true, refused(ss.getLocalPort()));                 // even the right server is refused without a pin
+            eq(null, within(sent));
+        }
+        Agent.pinnedKey = Agent.fp(pin);
+        eq(null, Agent.keyBlock());
+        eq("", Agent.fp(null));
+        eq("", Agent.fp("1a2b-3c4d"));                            // half a key is no key
+
+        for (Path dir : List.of(lecturer, classmate)) {
+            Files.deleteIfExists(dir.resolve("instructor.p12"));
+            Files.delete(dir);
+        }
+
         // ---- beacon ----
         eq("10.0.0.5:5757:Room 1:", String.join(":", Agent.parseBeacon("CCLASS1\t5757\tRoom 1", "10.0.0.5")));
         eq("10.0.0.5:5757:Room 1:pw\tx", String.join(":", Agent.parseBeacon("CCLASS1\t5757\tRoom 1\tpw\tx", "10.0.0.5"))); // shared password, kept whole

@@ -35,7 +35,10 @@ function saveSettings(s) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be a number from 1 to 65535');
   if (/[\s]/.test(String(s.host ?? ''))) throw new Error('The instructor address cannot contain spaces');
   if (/[\t\r\n]/.test(String(s.token ?? ''))) throw new Error('The class password cannot contain tabs or line breaks');
-  const next = { host: String(s.host ?? '').trim(), port, token: String(s.token ?? ''), regNo: String(s.regNo ?? loadSettings().regNo ?? '') };
+  // The instructor key is a fingerprint the lecturer reads out: hex in groups, so keep only what we compare.
+  const instructorKey = String(s.instructorKey ?? '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (instructorKey && instructorKey.length < 16) throw new Error('The instructor key is too short: paste the whole key your lecturer shows (64 hex characters)');
+  const next = { host: String(s.host ?? '').trim(), port, token: String(s.token ?? ''), instructorKey, regNo: String(s.regNo ?? loadSettings().regNo ?? '') };
   const tmp = SETTINGS() + '.tmp';
   fs.mkdirSync(path.dirname(tmp), { recursive: true });
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
@@ -85,7 +88,7 @@ const write = (line) => { if (agent && !agent.stdin.destroyed) agent.stdin.write
 
 function connect() {
   const s = loadSettings();
-  write(['CONNECT', oneLine(s.host) || 'auto', s.port, s.token, login.regNo, login.password].join('\t'));
+  write(['CONNECT', oneLine(s.host) || 'auto', s.port, s.token, login.regNo, login.password, oneLine(s.instructorKey)].join('\t'));
 }
 
 const safe = (fn) => async (_e, ...args) => {
@@ -105,6 +108,8 @@ ipcMain.handle('student:login', safe((regNo, password) => {
   if (!password || /[\t\r\n]/.test(password)) throw new Error('Enter your password');
   const s = loadSettings();
   if (!s.token && s.host) throw new Error("Enter the class password in Settings (gear icon), or clear the IP so the app finds your instructor by itself.");
+  // With no key we cannot tell the lecturer's PC from a classmate's laptop, whether we found it or the IP was typed in.
+  if (!s.instructorKey) throw new Error('Ask your lecturer for the instructor key and enter it in Settings (gear icon).');
   saveSettings({ ...s, regNo: reg }); // remember the reg no, never the password
   login = { regNo: reg, password: String(password) };
   connect();

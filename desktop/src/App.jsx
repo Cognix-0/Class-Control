@@ -215,6 +215,19 @@ export default function App() {
               <InfoCard pc={focusPc} seat={seatByKey.get(seatOf.get(focusId))} onRemote={() => setRemoteId(focusId)} onAction={(cmd) => cardAction(focusId, cmd)} onClose={() => setFocusId(null)} />
             </div>
           )}
+          {pcList.length === 0 && !session.coHost && (
+            <div className="waiting">
+              <div className="pulse" />
+              <div>
+                <div style={{ fontWeight: 600 }}>Waiting for student PCs…</div>
+                <div className="muted" style={{ fontSize: 13, margin: '4px 0 8px' }}>Student PCs on this network join by themselves: run the agent as Administrator and enter the class password once. Or connect by hand:</div>
+                <code>java Agent.java {info.ips[0] ?? '<this PC IP>'} {'<password>'} {session.port} {info.fingerprint || '<instructor key>'}</code>
+              </div>
+              <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(`java Agent.java ${info.ips[0] ?? ''} ${session.password} ${session.port} ${info.fingerprint ?? ''}`); toast('Command copied (includes the password)'); }}>
+                <Copy size={14} /> Copy
+              </button>
+            </div>
+          )}
           {presenterPc && <PresenterPip pc={presenterPc} onStop={() => present('', '0')} />}
           {overflow.length > 0 && <div className="waiting" style={{ bottom: 112 }}><b>{overflow.length} PC{overflow.length === 1 ? '' : 's'}</b>&nbsp;have no seat. Add rows or blocks in Layout.</div>}
           <ActionDock count={selected.size} total={pcList.length} sharingAll={sharingAll} onSend={send} request={dockRequest}

@@ -1,6 +1,16 @@
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -14,6 +24,34 @@ public class LabServerTest {
     static void throwsIae(Runnable r) {
         try { r.run(); } catch (IllegalArgumentException e) { return; }
         throw new AssertionError("expected IllegalArgumentException");
+    }
+
+    interface Risky { void run() throws Exception; }
+
+    /** Pins one certificate by its public key, the way Agent.Pinned does. */
+    record Pinned(String want) implements X509TrustManager {
+        @Override public void checkClientTrusted(X509Certificate[] chain, String t) throws CertificateException { throw new CertificateException("client"); }
+        @Override public void checkServerTrusted(X509Certificate[] chain, String t) throws CertificateException {
+            if (!LabServer.Identity.fingerprint(chain[0].getPublicKey().getEncoded()).startsWith(want)) throw new CertificateException("not pinned");
+        }
+        @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+    }
+
+    /** A TLS 1.3 socket that only trusts `pin`: what every student PC and co-instructor uses. */
+    static SSLSocket tls(int port, String pin) throws IOException, GeneralSecurityException {
+        SSLContext ctx = SSLContext.getInstance("TLSv1.3");
+        ctx.init(null, new TrustManager[]{new Pinned(pin)}, null);
+        SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket("127.0.0.1", port);
+        s.setEnabledProtocols(new String[]{"TLSv1.3"});
+        s.setSoTimeout(5000);
+        s.startHandshake();
+        return s;
+    }
+
+    /** Why `r` failed, so a test can check the message the lecturer would see. */
+    static String reason(Risky r) {
+        try { r.run(); } catch (Exception e) { return e.getMessage(); }
+        throw new AssertionError("expected it to fail");
     }
 
     /** Next sink event starting with `type`; other events are skipped. */
@@ -45,9 +83,8 @@ public class LabServerTest {
         final BufferedReader in;
         final PrintWriter out;
 
-        Agent(int port, String hello) throws IOException {
-            s = new Socket("127.0.0.1", port);
-            s.setSoTimeout(5000);
+        Agent(int port, String hello) throws Exception {
+            s = tls(port, PIN);
             in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true);
             out.println(hello);
@@ -56,10 +93,22 @@ public class LabServerTest {
         String next() throws IOException { return in.readLine(); }
     }
 
+    static String PIN;   // the certificate this test run pins, set once the keystore is open
+
     public static void main(String[] args) throws Exception {
         BlockingQueue<String> events = new LinkedBlockingQueue<>();
-        try (LabServer lab = new LabServer("pw", 0, events::add)) {
+        Path dir = Files.createTempDirectory("cckey");
+        Path keystore = dir.resolve("instructor.p12");
+        LabServer.Identity me = LabServer.Identity.load(keystore, "lecturerpw");   // keytool makes the certificate on the first class
+        PIN = me.fingerprint;
+        eq(64, PIN.length());                                                      // SHA-256 of the public key, in hex
+        eq(me.fingerprint, LabServer.Identity.load(keystore, "lecturerpw").fingerprint); // same certificate next class
+        eq("Wrong master password", reason(() -> LabServer.Identity.load(keystore, "guessguess")));
+        eq("The master password must be at least 8 characters", reason(() -> LabServer.Identity.load(keystore, "short")));
+
+        try (LabServer lab = new LabServer("pw", 0, events::add, me)) {
             int port = lab.port();
+            eq(List.of("TLSv1.3"), lab.protocols());                               // nothing older, ever
 
             Agent bad = new Agent(port, "nope\tX");
             eq(null, bad.next());                      // wrong password: dropped
@@ -243,6 +292,37 @@ public class LabServerTest {
             lab.send(List.of(kidId), "UNLOCK", "");
             kid.s.close();
 
+            // ---- only a client with the right certificate gets in ----
+            Path rogueDir = Files.createTempDirectory("ccrogue");   // a second lecturer's (or a student's) certificate
+            String other = LabServer.Identity.load(rogueDir.resolve("instructor.p12"), "someoneelse").fingerprint;
+            eq(false, other.equals(PIN));
+            Exception wrongCert = null;
+            try { tls(port, other); } catch (Exception e) { wrongCert = e; }       // a classmate's certificate pin never matches ours
+            eq(true, wrongCert instanceof SSLHandshakeException);
+
+            events.clear();
+            try (Socket plain = new Socket("127.0.0.1", port)) {                   // a plaintext client gets nowhere
+                plain.setSoTimeout(2000);
+                plain.getOutputStream().write("pw\tPC99\n".getBytes(StandardCharsets.UTF_8));
+                plain.getOutputStream().flush();
+                try { plain.getInputStream().read(); } catch (IOException expected) { } // it gets a TLS alert or a closed socket, never a class
+            }
+            for (long end = System.currentTimeMillis() + 700; System.currentTimeMillis() < end; ) {
+                String e = events.poll(100, TimeUnit.MILLISECONDS);
+                if (e != null && e.startsWith("ADDED")) throw new AssertionError("a plaintext client was let into the class");
+            }
+            events.clear();
+            Agent afterJunk = new Agent(port, "pw\tPC21");                        // and the class is still running
+            String junkId = event(events, "ADDED").split("\t")[1];
+            afterJunk.out.println("LOGIN\tIT24001\toverTls");                    // a student login, over TLS
+            eq("LOGIN\tok", afterJunk.next());
+            eq("STUDENT\t" + junkId + "\tIT24001", event(events, "STUDENT"));
+            eq("TLSv1.3", ((SSLSocket) afterJunk.s).getSession().getProtocol());
+            afterJunk.s.close();
+            event(events, "REMOVED");
+            for (Path f : List.of(rogueDir.resolve("instructor.p12"), rogueDir.resolve(LabServer.Identity.FINGERPRINT_FILE))) Files.deleteIfExists(f);
+            Files.delete(rogueDir);
+
             // ---- end of class releases everyone ----
             lab.endClass();
             eq("WB\toff", until(clean, "WB\t"));                               // skip thumbnail polls from the live-view check above
@@ -250,6 +330,8 @@ public class LabServerTest {
             eq("UNBLOCK\t", clean.next());
             eq("UNLOCK\t", clean.next());
         }
+        for (Path f : List.of(keystore, dir.resolve(LabServer.Identity.FINGERPRINT_FILE))) Files.deleteIfExists(f);
+        Files.delete(dir);
         System.out.println("LabServerTest: all checks passed");
     }
 }

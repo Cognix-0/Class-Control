@@ -1,6 +1,6 @@
 // Demo mode: fake student PCs that speak the real agent protocol over TCP,
 // so the whole UI can be tried on one machine without any Agent.java running.
-const net = require('node:net');
+const { connectPinned } = require('./pinnedTls');
 const { nativeImage } = require('electron');
 
 /** Gradient "desktop" with a taskbar, a window and an optional cursor dot, as base64 JPEG. */
@@ -31,11 +31,13 @@ const SCRIPT = {
   10: [[12000, 'CHAT\tCan you check my code? Question 3 gives an error']],
 };
 
-function fakeAgent(port, token, name, hue, i) {
-  const s = net.connect(port, '127.0.0.1');
+function fakeAgent(port, token, name, hue, i, pin) {
+  const s = connectPinned({ host: '127.0.0.1', port, pin });
   s.setEncoding('utf8');
-  s.write(`${token}\t${name}\n`);
-  if (i % 9 !== 8) s.write(`LOGIN\tIT23${String(101 + i).padStart(4, '0')}\tdemo\n`); // two PCs stay without a student
+  s.once('pinned', () => {   // the demo pins the demo certificate, like a real student PC
+    s.write(`${token}\t${name}\n`);
+    if (i % 9 !== 8) s.write(`LOGIN\tIT23${String(101 + i).padStart(4, '0')}\tdemo\n`); // two PCs stay without a student
+  });
   const timers = (SCRIPT[i] ?? []).map(([ms, line]) => setTimeout(() => s.write(line + '\n'), ms));
   let buf = '';
   let viewTimer = null;
@@ -67,8 +69,8 @@ function fakeAgent(port, token, name, hue, i) {
   return s;
 }
 
-function startDemo(port, token, count = 18) {
-  return Array.from({ length: count }, (_, i) => fakeAgent(port, token, `LAB-PC${String(i + 1).padStart(2, '0')}`, i * 0.7, i));
+function startDemo(port, token, pin, count = 18) {
+  return Array.from({ length: count }, (_, i) => fakeAgent(port, token, `LAB-PC${String(i + 1).padStart(2, '0')}`, i * 0.7, i, pin));
 }
 
 module.exports = { startDemo };
