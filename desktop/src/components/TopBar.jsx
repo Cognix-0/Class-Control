@@ -1,4 +1,5 @@
-import { Box, LayoutGrid, LocateFixed, PenLine, Radio } from 'lucide-react';
+import { useState } from 'react';
+import { Box, Eye, EyeOff, LayoutGrid, LocateFixed, PenLine, Radio } from 'lucide-react';
 
 export default function TopBar({ online, total, live, onLive, view, onView, onRecenter, panel, onPanel, address, sharing, unread, boardLive, onBoard, co }) {
   const tab = (id, label) => (

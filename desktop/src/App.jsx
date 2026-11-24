@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy } from 'lucide-react';
 import StartScreen from './components/StartScreen.jsx';
 import TopBar from './components/TopBar.jsx';
 import SearchBox from './components/SearchBox.jsx';
