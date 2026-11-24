@@ -50,6 +50,8 @@ Discovery: the server broadcasts `CCLASS1\t<tcpPort>\t<name>[\t<token>]` over UD
 Whiteboard: `WB\tbeg,<rrggbb>,<width>,<x>,<y>` / `add,<x>,<y>,...` / `end` / `clear` / `off`; all numbers are fractions (0..1) of a 16:9 board. The server validates each line, keeps the strokes and replays them to PCs that join later.
 State: the server remembers each PC's LOCK and web rules by host name and re-sends them when that PC reconnects; `endClass` (app closed) sends WB off, SCREENOFF, UNBLOCK and UNLOCK to everyone.
 
+Co-instructors: one class server, many instructors. A second instructor app sees running classes (their UDP beacons) on its start screen and joins one over the same TCP port with `#INSTRUCTOR\t<name>`; the host gets an Allow / Decline prompt (`COJOIN` / `COACCEPT`, auto-declined after 2 minutes). Once allowed it receives `JOINED`, a snapshot of the class as events, then every live event, and may send the host's control lines except `FORGET` / `COACCEPT` / `START` / `STOP`. Students keep one connection, so two instructors never fight over a PC. Starting a second class while one is visible warns first, because each student PC joins only one class.
+
 ## Known limits
 
 - Website blocking (BLOCK / ALLOW): every browser request goes through the agent's local proxy; Windows points the system proxy at it and firewall rules stop Chrome, Edge, Firefox, Brave, Opera, Vivaldi and IE from connecting directly. Not literally 100%: portable or renamed browsers, VPNs, another network (phone hotspot) and a student with admin rights can bypass it. Per-site rules apply to hostnames only (no URL paths over HTTPS).
@@ -63,6 +65,7 @@ State: the server remembers each PC's LOCK and web rules by host name and re-sen
 - Quitting the student app stops its agent (same as closing the agent); a student who logs out is no longer listed by name.
 - Screen share and remote view are JPEG snapshots, no audio.
 - Remote control can't send Ctrl+Alt+Del.
+- Co-instructors: each instructor's whiteboard canvas shows only their own strokes (one whiteboard user at a time); remote-view frames go to every instructor.
 
 ## Rules
 

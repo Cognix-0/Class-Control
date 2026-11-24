@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, screen } = require('electron');
 const path = require('node:path');
 const os = require('node:os');
+const dgram = require('node:dgram');
 const { Lab } = require('./lab');
 const { JavaLab } = require('./javaLab');
 const layout = require('./layout');
@@ -41,7 +42,29 @@ ipcMain.handle('lab:demo', safe(async () => {
   startDemo(port, 'demo');
   return port;
 }));
-ipcMain.handle('lab:info', safe(() => ({ ips: localIps(), hostname: os.hostname(), sharing: lab.sharingIds(), presenter: lab.presenterId?.() ?? null })));
+// Classes already running on this network (their UDP beacons), so a second instructor joins instead of splitting the room.
+ipcMain.handle('lab:classes', safe(() => new Promise((resolve) => {
+  const found = new Map();
+  const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  const done = () => { try { sock.close(); } catch { /* already closed */ } resolve([...found.values()]); };
+  sock.on('error', done);
+  sock.on('message', (msg, from) => {
+    const p = msg.toString('utf8').split('\t');
+    const port = Number(p[1]);
+    if (p[0] !== 'CCLASS1' || !Number.isInteger(port) || port < 1 || port > 65535) return;
+    found.set(`${from.address}:${port}`, { host: from.address, port, name: (p[2] ?? '').slice(0, 64) || from.address });
+  });
+  sock.bind(5758, () => setTimeout(done, 2500)); // beacons come every 2 s
+})));
+ipcMain.handle('lab:join', safe((host, port) => {
+  if (typeof host !== 'string' || !/^[A-Za-z0-9.:-]{1,253}$/.test(host.trim())) throw new Error('Enter the IP address of the instructor\'s computer');
+  const p = Number(port);
+  if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('Port must be 1-65535');
+  if (!lab.join) throw new Error('Joining a class needs the Java backend');
+  return lab.join(host.trim(), p, os.hostname());
+}));
+ipcMain.handle('lab:coaccept', safe((id, ok) => lab.coaccept(String(id), !!ok)));
+ipcMain.handle('lab:info', safe(() => ({ ips: localIps(), hostname: os.hostname(), sharing: lab.sharingIds(), presenter: lab.presenterId?.() ?? null, role: lab.role?.() ?? 'host' })));
 ipcMain.handle('lab:present', safe((id, mode) => lab.present(String(id ?? ''), String(mode))));
 ipcMain.handle('lab:forget', safe((reg) => lab.forget(String(reg))));
 ipcMain.handle('lab:list', safe(() => lab.list()));

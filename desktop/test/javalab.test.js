@@ -145,3 +145,47 @@ test('students: login, chat, share request, presenting', { timeout: 60_000 }, as
     lab.stop();
   }
 });
+
+test('a second instructor joins the same class and sees the same students', { timeout: 60_000 }, async () => {
+  const host = new JavaLab();
+  const port = await host.start('pw', 0);
+  const co = new JavaLab();
+  try {
+    const added = nextEvent(host, 'added');
+    const a = agent(port, 'pw\tPC01');
+    const { pc } = await added;
+
+    // declined request
+    const no = new JavaLab();
+    const ask1 = nextEvent(host, 'cojoin');
+    const denied = no.join('127.0.0.1', port, 'Mr Silva');
+    host.coaccept((await ask1).id, false);
+    await assert.rejects(denied, /declined/);
+
+    // accepted request: the co-instructor gets the class as it is now
+    const ask2 = nextEvent(host, 'cojoin');
+    const seen = nextEvent(co, 'added');
+    const joined = co.join('127.0.0.1', port, 'Ms Perera');
+    const req = await ask2;
+    assert.equal(req.name, 'Ms Perera');
+    host.coaccept(req.id, true);
+    assert.equal(await joined, port);
+    assert.equal((await seen).pc.id, pc.id);
+    assert.equal(co.role(), 'co');
+
+    assert.equal(co.send([pc.id], 'MSG', 'hi from co'), 1);   // co-instructor's command reaches the student
+    assert.equal(await a.next(), 'MSG\thi from co');
+    const locked = nextEvent(co, 'updated');
+    host.send([pc.id], 'LOCK', '');                             // and the host's actions show up for the co-instructor
+    assert.equal(await a.next(), 'LOCK\tEyes on the instructor');
+    assert.equal((await locked).pc.locked, true);
+
+    const ended = nextEvent(co, 'ended');
+    host.stop();                                                // host ends the class: the co-instructor is told
+    await ended;
+    a.destroy();
+  } finally {
+    co.stop();
+    host.stop();
+  }
+});
