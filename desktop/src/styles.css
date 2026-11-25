@@ -46,6 +46,7 @@ input, textarea { user-select: text; }
 .btn.on { border-color: var(--accent); color: var(--accent-hi); background: rgba(79, 179, 191, .12); }
 .btn.sm { height: 30px; padding: 0 10px; font-size: 13px; border-radius: 8px; }
 .icon-btn { width: 36px; padding: 0; justify-content: center; }
+.dock .dock-selection-btn { width: 40px; height: 36px; padding: 0; }
 
 /* ---------- start screen ---------- */
 .start { height: 100%; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 35%, rgba(79, 179, 191, .14), transparent 55%), var(--bg); }

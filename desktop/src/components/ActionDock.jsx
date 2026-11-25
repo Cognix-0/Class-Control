@@ -42,8 +42,8 @@ export default function ActionDock({ count, total, sharingAll, onSend, onRemote,
   return (
     <div className="dock" onPointerDown={(e) => e.stopPropagation()}>
       <div className="count">{none ? <span className="muted">Select PCs to act</span> : <><b>{count}</b> PC{count === 1 ? '' : 's'} selected</>}</div>
-      <button className="btn ghost sm icon-btn" title="Select all (Ctrl+A)" onClick={onSelectAll} disabled={!total}><CheckSquare size={16} /></button>
-      <button className="btn ghost sm icon-btn" title="Clear selection (Esc)" onClick={onClear} disabled={none}><XSquare size={16} /></button>
+      <button className="btn ghost sm icon-btn dock-selection-btn" title="Select all (Ctrl+A)" onClick={onSelectAll} disabled={!total}><CheckSquare size={18} /></button>
+      <button className="btn ghost sm icon-btn dock-selection-btn" title="Clear selection (Esc)" onClick={onClear} disabled={none}><XSquare size={18} /></button>
       <div className="sep" />
       <A cmd="MSG" icon={MessageSquare} label="Message" />
       <A cmd="URL" icon={Link2} label="Open link" />

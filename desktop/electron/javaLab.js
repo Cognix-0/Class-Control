@@ -3,6 +3,7 @@
 // Control lines go to its stdin and events come back on stdout, both tab separated (see LabServer.java).
 // join() instead connects to another instructor's class over TCP and speaks the same lines (co-instructor).
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const readline = require('node:readline');
