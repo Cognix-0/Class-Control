@@ -656,6 +656,7 @@ public final class LabServer implements AutoCloseable {
                 if (!n.isUp() || n.isLoopback()) continue;
                 for (InterfaceAddress ia : n.getInterfaceAddresses()) if (ia.getBroadcast() != null) all.add(ia.getBroadcast());
             }
+            all.add(InetAddress.getLoopbackAddress()); // allows student app on the same machine to discover without LAN broadcast
         } catch (IOException ignored) { }
         return all;
     }

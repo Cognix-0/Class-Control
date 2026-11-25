@@ -4,8 +4,9 @@ Requires Windows 10/11, 64-bit. Java and Electron are included; Node.js and Java
 
 1. Copy `desktop/release/Class Control-Setup-1.0.0-x64.exe` to the instructor PC and run it. Setup automatically installs to the default location, creates shortcuts, and launches the app.
 2. Copy `desktop/release-student/Class Control Student-Setup-1.0.0-x64.exe` to each student PC and run it. Setup automatically installs and launches the student app. Starting the student app requests administrator access for computer management features.
-3. Connect the PCs to the same local network. Start a class in the instructor app, then open the student apps and sign in. Settings allows an explicit instructor IP and class password if automatic discovery is unavailable.
-4. Allow the applications on the private network when Windows Firewall prompts. The network must permit TCP 5757 and UDP 5758 between lab PCs.
+3. Connect the PCs to the same local network and start a class in the instructor app. Students can open the student app, enter their registration number and password, and sign in directly: the student app finds the class on the network and pins the instructor key automatically on the first successful sign-in. For stricter verification before first sign-in, students can paste the key shown on the instructor app's start screen into **Settings** (gear icon) -> **Instructor key**.
+4. Leave **Instructor IP address** blank to find the class automatically. If discovery is unavailable, enter the instructor PC's current IP address and port; also enter the class password if it is not being shared automatically. If the student app reports that the instructor key does not match, ask the instructor to confirm the displayed key and update (or clear) **Instructor key** in Settings. If the instructor's identity/key was reset, students must update or clear the saved key in Settings.
+5. Allow the applications on the private network when Windows Firewall prompts. The network must permit TCP 5757 and UDP 5758 between lab PCs. If UDP discovery is blocked or the network isolates clients, use the instructor IP in Settings; TCP 5757 must still be reachable.
 
 These installers are unsigned, so Windows may show an unknown publisher / SmartScreen prompt. Only run installers you obtained from a trusted source. Uninstall using Windows Settings > Apps.
 
@@ -21,7 +22,7 @@ npm.cmd run dist:student
 
 `prepare:runtime` creates `desktop/build/java` from the build machine's JDK. Remove that generated directory before rebuilding with a newer JDK. Its runtime license notices are included in the installed `resources/java/legal` directory.
 
-The student defaults can be set in `desktop/electron/studentDefaults.json` before building, or configured individually in the installed app.
+The student defaults can be set in `desktop/electron/studentDefaults.json` before building, or configured individually in the installed app. For a lab-specific student installer, set `host`, `port`, and the instructor's full `instructorKey` in that file before building; only set `token` if the class password should be preconfigured on student PCs. The instructor key must match the certificate used by the instructor installation.
 
 ## Mac computers
 

@@ -26,6 +26,11 @@ export default function Login({ regNo, conn, settings, onLogin, onCancel, onSett
         <button type="button" className="btn ghost icon-btn gear" onClick={onSettings} aria-label="Connection settings" title="Connection settings"><Gear size={17} /></button>
         <h1 className="brand-xl">Class<span>Control</span></h1>
         <div className="sub-mono">STUDENT</div>
+        {!settings?.instructorKey && (
+          <div className="error" style={{ marginBottom: 12, cursor: 'pointer', textAlign: 'left', fontSize: 13 }} onClick={onSettings}>
+            ⚠️ <b>Instructor key required</b>: Click here or the ⚙️ gear icon to enter the key from your instructor.
+          </div>
+        )}
         <div className="field">
           <label htmlFor="reg">Registration number</label>
           <input id="reg" className="input mono" value={reg} autoFocus={!reg} disabled={waiting} placeholder="e.g. IT23123456"

@@ -129,13 +129,26 @@ public class AgentTest {
             eq(true, refused(ss.getLocalPort()));
         }
 
-        // ---- no pinned key: do not connect at all, whether the IP was found or typed in ----
+        // ---- no pinned key: strict connect refuses, while TOFU connect (--app first sign-in) captures and pins the key ----
         Agent.pinnedKey = "";
         eq("Ask your lecturer for the instructor key", Agent.keyBlock());
         try (SSLServerSocket ss = server(real[0], "lecturerpw")) {
             Future<String> sent = firstLine(ss);
-            eq(true, refused(ss.getLocalPort()));                 // even the right server is refused without a pin
+            eq(true, refused(ss.getLocalPort()));                 // even the right server is refused without a pin in strict mode
             eq(null, within(sent));
+        }
+        try (SSLServerSocket ss = server(real[0], "lecturerpw")) {
+            Future<String> sent = firstLine(ss);
+            try (SSLSocket s = Agent.connect("127.0.0.1", ss.getLocalPort(), 5000, true)) {
+                eq("TLSv1.3", s.getSession().getProtocol());
+                eq(pin, Agent.sessionKey);
+                new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true).println("pw\tPC03");
+            }
+            eq("pw\tPC03", within(sent));
+        }
+        Agent.pinnedKey = Agent.sessionKey;
+        try (SSLServerSocket ss = server(rogue[0], "classmatepw")) {
+            eq(true, refused(ss.getLocalPort()));                 // once pinned by TOFU, a rogue server is refused
         }
         Agent.pinnedKey = Agent.fp(pin);
         eq(null, Agent.keyBlock());
