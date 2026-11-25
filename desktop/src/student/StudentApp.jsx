@@ -41,10 +41,15 @@ export default function StudentApp() {
         else if (e.value === 'deny') { setShare('off'); toast('Your instructor said not now', 'warn'); }
         else setShare('off');
       } else if (e.type === 'viewed') setViewed(e.on);
+      else if (e.type === 'settings') setSettings(e.value);
     });
   }, [toast]);
 
   async function login(reg, password) {
+    if (!settings?.instructorKey) {
+      setSettingsOpen(true);
+      return 'Please enter the instructor key in Settings first';
+    }
     const r = await window.student.login(reg, password);
     if (!r.ok) return r.error;
     setRegNo(reg);

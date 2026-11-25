@@ -27,7 +27,16 @@ let loggedIn = false;
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(SETTINGS(), 'utf8')); } catch { /* first run: defaults only */ }
-  return { ...DEFAULTS, ...saved };
+  const defaults = { ...DEFAULTS };
+  if (!defaults.instructorKey && !saved.instructorKey) {
+    try {
+      const hostFp = path.join(app.getPath('appData'), 'Class Control', 'instructor-fingerprint.txt');
+      if (fs.existsSync(hostFp)) {
+        defaults.instructorKey = fs.readFileSync(hostFp, 'utf8').trim();
+      }
+    } catch { /* ignore */ }
+  }
+  return { ...defaults, ...saved };
 }
 
 function saveSettings(s) {
@@ -79,6 +88,16 @@ function startAgent() {
         break;
       case 'SHARING': send({ type: 'sharing', value: p[1] }); break;
       case 'VIEWED': send({ type: 'viewed', on: p[1] === '1' }); break;
+      case 'PINNED': {
+        const fp = String(p[1] ?? '').toLowerCase().replace(/[^0-9a-f]/g, '');
+        if (fp.length >= 16) {
+          try {
+            const next = saveSettings({ ...loadSettings(), instructorKey: fp });
+            send({ type: 'settings', value: next });
+          } catch (e) { console.error(e); }
+        }
+        break;
+      }
       case 'LOG': console.log(p[1]); break;
     }
   });
@@ -108,8 +127,6 @@ ipcMain.handle('student:login', safe((regNo, password) => {
   if (!password || /[\t\r\n]/.test(password)) throw new Error('Enter your password');
   const s = loadSettings();
   if (!s.token && s.host) throw new Error("Enter the class password in Settings (gear icon), or clear the IP so the app finds your instructor by itself.");
-  // With no key we cannot tell the lecturer's PC from a classmate's laptop, whether we found it or the IP was typed in.
-  if (!s.instructorKey) throw new Error('Ask your lecturer for the instructor key and enter it in Settings (gear icon).');
   saveSettings({ ...s, regNo: reg }); // remember the reg no, never the password
   login = { regNo: reg, password: String(password) };
   connect();

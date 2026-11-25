@@ -41,8 +41,8 @@ export default function Settings({ value, defaults, onSave, onClose }) {
         </div>
         <div className="field">
           <label htmlFor="key">Instructor key</label>
-          <input id="key" className="input mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste the whole key from your lecturer" />
-          <small className="muted">Ask your lecturer and paste it whole. Your PC only joins a class run from their computer, so nobody else can lock or watch your screen.</small>
+          <input id="key" className="input mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Auto-saved on first sign-in (or paste from lecturer)" />
+          <small className="muted">Saved automatically the first time you sign in, or paste the key from your lecturer. Clear it and save if your lecturer resets their key.</small>
         </div>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="row">

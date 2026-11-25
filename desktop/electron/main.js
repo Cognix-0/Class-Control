@@ -71,7 +71,10 @@ ipcMain.handle('lab:classes', safe(() => new Promise((resolve) => {
     const p = msg.toString('utf8').split('\t');
     const port = Number(p[1]);
     if (p[0] !== 'CCLASS1' || !Number.isInteger(port) || port < 1 || port > 65535) return;
-    found.set(`${from.address}:${port}`, { host: from.address, port, name: (p[2] ?? '').slice(0, 64) || from.address });
+    const name = (p[2] ?? '').slice(0, 64) || from.address;
+    const key = `${port}:${name}`;
+    const prev = found.get(key);
+    if (!prev || prev.host === '127.0.0.1') found.set(key, { host: from.address, port, name });
   });
   sock.bind(5758, () => setTimeout(done, 2500)); // beacons come every 2 s
 })));
